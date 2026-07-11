@@ -1,0 +1,20 @@
+name: "LLM Judge 示例"
+description: "演示用 LLM-as-Judge 评估回复质量"
+version: "1.0"
+config:
+  moss:
+    timeout: 120
+  eval:
+    judge_model: claude-opus-4-8
+tests:
+  - name: "code-review-quality"
+    moss:
+      prompt: "请 review 以下代码，指出潜在问题:\n```python\ndef divide(a, b):\n    return a / b\n```"
+    eval:
+      - type: llm_judge
+        rubric: |
+          请从以下维度评分（1-5分）：
+          1. 是否指出了除零错误
+          2. 建议是否具体可操作
+          3. 回复是否清晰简洁
+        threshold: 3.0

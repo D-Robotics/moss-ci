@@ -1,0 +1,17 @@
+name: "端到端示例"
+description: "演示端到端任务测试"
+version: "1.0"
+config:
+  moss:
+    timeout: 300
+tests:
+  - name: "fix-and-test"
+    moss:
+      task: "在 fixtures/ 目录下有一个 buggy.py，找出 bug 并修复它"
+      workdir: ./fixtures
+    eval:
+      - type: side_effect
+        check: "file_modified"
+      - type: llm_judge
+        rubric: "修复是否正确"
+        threshold: 3.0

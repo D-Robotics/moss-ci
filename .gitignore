@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# venv
+.venv/
+
+# SQLite dev DB
+*.db
+
+# Node / web
+moss_ci/web/node_modules/
+moss_ci/web/dist/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Scratch (superpowers SDD ledger etc.)
+.superpowers/

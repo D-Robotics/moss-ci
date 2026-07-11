@@ -1,0 +1,20 @@
+name: "工具调用示例"
+description: "演示工具调用顺序和参数验证"
+version: "1.0"
+config:
+  moss:
+    timeout: 120
+tests:
+  - name: "read-then-write"
+    moss:
+      prompt: "读取 config.yaml，然后创建一个备份文件 config.backup.yaml"
+    eval:
+      - type: tool_sequence
+        expected:
+          - tool: read_file
+          - tool: write_file
+        order: strict
+      - type: tool_args
+        tool: read_file
+        contains:
+          path: "config.yaml"

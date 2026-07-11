@@ -1,0 +1,13 @@
+name: "简单断言示例"
+description: "演示最基本的 contains 评估"
+version: "1.0"
+config:
+  moss:
+    timeout: 60
+tests:
+  - name: "hello-world"
+    moss:
+      prompt: "回复 'hello world'，不要带任何其他内容"
+    eval:
+      - type: contains
+        value: "hello world"
