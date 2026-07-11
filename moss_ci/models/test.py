@@ -35,13 +35,21 @@ class ConversationTurn(BaseModel):
 
 
 class MossCallSpec(BaseModel):
-    """Specification for how to call Moss."""
+    """Specification for how to call Moss.
+
+    Per-test ``timeout``/``retry`` use the same None-sentinel pattern as
+    :class:`MossConfig`: ``None`` means "inherit the global config default",
+    letting the Scheduler distinguish an explicit per-test override from an
+    unset field.
+    """
     prompt: Optional[str] = Field(default=None, description="Single prompt")
     task: Optional[str] = Field(default=None, description="End-to-end task description")
     conversation: Optional[list[ConversationTurn]] = Field(default=None, description="Multi-turn conversation")
     context: Optional[str] = Field(default=None, description="Additional context for the prompt")
     workdir: Optional[str] = Field(default=None, description="Working directory for task execution")
     env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
+    timeout: Optional[int] = Field(default=None, description="Timeout in seconds; None = inherit global config")
+    retry: Optional[int] = Field(default=None, description="Retry count on network error; None = inherit global config")
 
 
 class ContainsSpec(BaseModel):
