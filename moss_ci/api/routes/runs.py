@@ -59,3 +59,74 @@ async def cancel_run(run_id: str):
         raise HTTPException(status_code=404, detail="Run not found")
     _runs[run_id].status = RunStatus.CANCELLED
     return {"run_id": run_id, "status": "cancelled"}
+
+
+@router.get("/runs")
+async def list_runs(limit: int = 20, offset: int = 0):
+    all_runs = list(_runs.values())
+    all_runs.sort(key=lambda r: r.created_at, reverse=True)
+    page = all_runs[offset:offset + limit]
+    return [r.model_dump() for r in page]
+
+
+@router.get("/runs/{run_id}/diff")
+async def diff_run(run_id: str):
+    if run_id not in _runs:
+        raise HTTPException(status_code=404, detail="Run not found")
+    current = _runs[run_id]
+    all_runs = sorted([r for r in _runs.values() if r.run_id != run_id], key=lambda r: r.created_at, reverse=True)
+    previous = all_runs[0] if all_runs else None
+    diff = {"new_failures": [], "fixed": [], "improved": [], "degraded": []}
+    if previous:
+        for cur_suite in current.suites:
+            prev_suite = next((s for s in previous.suites if s.suite_name == cur_suite.suite_name), None)
+            if prev_suite:
+                for cur_test in cur_suite.tests:
+                    prev_test = next((t for t in prev_suite.tests if t.test_name == cur_test.test_name), None)
+                    if prev_test:
+                        if prev_test.status == "pass" and cur_test.status == "fail":
+                            diff["new_failures"].append({"test_name": cur_test.test_name, "previous_status": prev_test.status, "current_status": cur_test.status})
+                        elif prev_test.status == "fail" and cur_test.status == "pass":
+                            diff["fixed"].append({"test_name": cur_test.test_name})
+    return diff
+
+
+@router.get("/runs/{run_id}/tests")
+async def list_tests(run_id: str):
+    if run_id not in _runs:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tests = []
+    for suite in _runs[run_id].suites:
+        for test in suite.tests:
+            tests.append({"suite_name": suite.suite_name, **test.model_dump()})
+    return tests
+
+
+@router.get("/runs/{run_id}/tests/{test_name}")
+async def get_test_detail(run_id: str, test_name: str):
+    if run_id not in _runs:
+        raise HTTPException(status_code=404, detail="Run not found")
+    for suite in _runs[run_id].suites:
+        for test in suite.tests:
+            if test.test_name == test_name:
+                return {"suite_name": suite.suite_name, **test.model_dump()}
+    raise HTTPException(status_code=404, detail="Test not found")
+
+
+@router.get("/suites")
+async def list_suites():
+    suite_names = set()
+    for run in _runs.values():
+        for suite in run.suites:
+            suite_names.add(suite.suite_name)
+    return list(suite_names)
+
+
+@router.get("/suites/{name}/history")
+async def suite_history(name: str, limit: int = 20):
+    history = []
+    for run in sorted(_runs.values(), key=lambda r: r.created_at, reverse=True):
+        for suite in run.suites:
+            if suite.suite_name == name:
+                history.append({"run_id": run.run_id, "date": run.created_at.isoformat(), "passed": suite.passed, "failed": suite.failed, "total": suite.total})
+    return history[:limit]
