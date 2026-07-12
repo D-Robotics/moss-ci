@@ -28,3 +28,6 @@ Thumbs.db
 
 # Scratch (superpowers SDD ledger etc.)
 .superpowers/
+
+# Moss CLI runtime sessions (generated when moss-ci invokes Moss)
+.moss/
