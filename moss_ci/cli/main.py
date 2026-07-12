@@ -5,6 +5,7 @@ from rich.table import Table
 from moss_ci.parser.yaml_parser import parse_suite, parse_suite_string
 from moss_ci.engine.pipeline import PipelineEngine, PipelineConfig
 from moss_ci.engine.diff import DiffEngine
+from moss_ci.models.result import PipelineResult
 from moss_ci.runner.base import MossRunner
 from moss_ci.storage.db import get_db
 from moss_ci.storage.repository import RunRepository
@@ -146,24 +147,13 @@ def history(limit: int = typer.Option(20, "--limit", "-n")):
     console.print(table)
 
 
-@app.command()
-def diff(run_id_1: str = typer.Argument(..., help="Previous run ID"),
-         run_id_2: str = typer.Argument(..., help="Current run ID")):
-    """Compare two runs (regression analysis)."""
-    async def _get():
-        db = get_db()
-        await db.init()
-        repo = RunRepository(db)
-        return await repo.get(run_id_1), await repo.get(run_id_2)
-    prev, curr = asyncio.run(_get())
-    if prev is None:
-        console.print(f"[red]Previous run not found:[/red] {run_id_1}")
-        raise typer.Exit(1)
-    if curr is None:
-        console.print(f"[red]Current run not found:[/red] {run_id_2}")
-        raise typer.Exit(1)
-    d = DiffEngine().compare(curr, prev)
-    console.print(f"[bold]Regression diff[/bold]: {run_id_1} (prev)  vs  {run_id_2} (curr)\n")
+def _print_diff(d, prev_id: str, curr_id: str) -> None:
+    """Print a DiffResult as a human-readable regression report.
+
+    Shared by `diff` (reads runs from DB) and `diff-files` (reads exported
+    JSON), so both produce identical output.
+    """
+    console.print(f"[bold]Regression diff[/bold]: {prev_id} (prev)  vs  {curr_id} (curr)\n")
     if not (d.new_failures or d.fixed or d.improved or d.degraded):
         console.print("[green]No changes — same results in both runs.[/green]")
         return
@@ -183,6 +173,77 @@ def diff(run_id_1: str = typer.Argument(..., help="Previous run ID"),
         console.print(f"[red]↓ {len(d.degraded)} degraded:[/red]")
         for it in d.degraded:
             console.print(f"    {it.test_name}  {it.previous_score} → {it.current_score}")
+
+
+@app.command()
+def diff(run_id_1: str = typer.Argument(..., help="Previous run ID"),
+         run_id_2: str = typer.Argument(..., help="Current run ID")):
+    """Compare two runs (regression analysis). Reads both from the local DB."""
+    async def _get():
+        db = get_db()
+        await db.init()
+        repo = RunRepository(db)
+        return await repo.get(run_id_1), await repo.get(run_id_2)
+    prev, curr = asyncio.run(_get())
+    if prev is None:
+        console.print(f"[red]Previous run not found:[/red] {run_id_1}")
+        raise typer.Exit(1)
+    if curr is None:
+        console.print(f"[red]Current run not found:[/red] {run_id_2}")
+        raise typer.Exit(1)
+    d = DiffEngine().compare(curr, prev)
+    _print_diff(d, run_id_1, run_id_2)
+
+
+@app.command()
+def export(run_id: str = typer.Argument(None, help="Run ID to export (omit for the latest run)"),
+           out: str = typer.Option(..., "--out", "-o", help="Output JSON file path")):
+    """Export a run from the local DB to a JSON file.
+
+    Lets a run result travel outside the SQLite DB — e.g. a CI runner can
+    upload it as an artifact/cache and a later run (or local checkout) can
+    `diff-files` against it. Omit run_id to export the most recent run
+    (handy in CI where the run_id isn't easily captured from `run` output).
+    """
+    async def _get():
+        db = get_db()
+        await db.init()
+        repo = RunRepository(db)
+        if run_id is None:
+            latest = await repo.list(limit=1)
+            if not latest:
+                return None, None
+            return latest[0], latest[0].run_id
+        return await repo.get(run_id), run_id
+    result, resolved_id = asyncio.run(_get())
+    if result is None:
+        console.print(f"[red]Run not found:[/red] {run_id or '(latest)'}")
+        raise typer.Exit(1)
+    Path(out).write_text(result.model_dump_json(indent=2), encoding="utf-8")
+    console.print(f"[green]✓[/green] Exported {resolved_id} → {out}")
+
+
+@app.command()
+def diff_files(prev_file: str = typer.Argument(..., help="Previous run JSON file"),
+               curr_file: str = typer.Argument(..., help="Current run JSON file")):
+    """Compare two runs exported as JSON files (regression analysis).
+
+    Counterpart to `export`: read two PipelineResult JSON files and report
+    new_failures / fixed / improved / degraded. Used by CI to diff against
+    the last run's exported result, and locally to compare exported runs.
+    """
+    try:
+        prev = PipelineResult.model_validate_json(Path(prev_file).read_text(encoding="utf-8"))
+    except Exception as e:
+        console.print(f"[red]Cannot read previous file {prev_file}:[/red] {e}")
+        raise typer.Exit(1)
+    try:
+        curr = PipelineResult.model_validate_json(Path(curr_file).read_text(encoding="utf-8"))
+    except Exception as e:
+        console.print(f"[red]Cannot read current file {curr_file}:[/red] {e}")
+        raise typer.Exit(1)
+    d = DiffEngine().compare(curr, prev)
+    _print_diff(d, prev.run_id or prev_file, curr.run_id or curr_file)
 
 
 @app.command()
