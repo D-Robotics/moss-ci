@@ -49,23 +49,28 @@ def run(
     # where no Moss instance is available.
     runner = None if mock else MossRunner()
 
-    async def _run():
-        engine = PipelineEngine(PipelineConfig(fail_fast=fail_fast, max_concurrency=concurrency), runner=runner)
-        return await engine.run(suites)
-
     console.print(f"\nRunning {sum(len(s.tests) for s in suites)} tests across {len(suites)} suites...\n")
-    result = asyncio.run(_run())
 
-    # Persist the run so `history`/`status`/`diff` can read it back.
-    run_id = result.run_id or uuid.uuid4().hex[:8]
-    result.run_id = run_id
+    async def _run_and_save():
+        engine = PipelineEngine(PipelineConfig(fail_fast=fail_fast, max_concurrency=concurrency), runner=runner)
+        result = await engine.run(suites)
+        # Persist so `history`/`status`/`diff` can read it back. Same event
+        # loop as the run — calling asyncio.run() a second time here would
+        # raise "cannot be called from a running event loop" / leave a stale
+        # loop on some platforms.
+        run_id = result.run_id or uuid.uuid4().hex[:8]
+        result.run_id = run_id
+        try:
+            db = get_db()
+            await db.init()
+            await RunRepository(db).save(result)
+        except Exception as e:
+            # Persistence is best-effort in the CLI; don't let a DB hiccup
+            # mask the actual test results.
+            console.print(f"[yellow]warn: could not persist run ({e})[/yellow]")
+        return result, run_id
 
-    async def _save():
-        db = get_db()
-        await db.init()
-        await RunRepository(db).save(result)
-
-    asyncio.run(_save())
+    result, run_id = asyncio.run(_run_and_save())
 
     table = Table(title="Results")
     table.add_column("Suite", style="cyan")
