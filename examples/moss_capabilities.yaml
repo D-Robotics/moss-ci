@@ -64,3 +64,21 @@ tests:
       runs: 3
       pass_threshold: 2
       consensus: majority
+
+  - name: "工具调用-顺序与参数"
+    description: |
+      验证 Moss 真的调了 read_file 工具，且传的 path 参数含 secret_config。
+      这测的是工具调用能力本身——不是回答对不对，而是会不会调工具、参数对不对。
+      moss-ci 从 Moss 的 session jsonl 提取结构化 tool_use 来评估。
+    moss:
+      prompt: "Read the file secret_config.json in the current directory, then reply: OK"
+      workdir: ./examples/fixtures
+    eval:
+      - type: tool_sequence
+        expected:
+          - tool: read_file
+        order: strict
+      - type: tool_args
+        tool: read_file
+        contains:
+          path: "secret_config"
