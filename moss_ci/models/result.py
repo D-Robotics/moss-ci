@@ -81,3 +81,14 @@ class PipelineResult(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = Field(default=None)
     total_duration: float = Field(default=0.0)
+
+
+class MossResult(BaseModel):
+    """Raw result from a Moss invocation."""
+    output: str = Field(default="")
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    exit_code: int = Field(default=0)
+    duration: float = Field(default=0.0)
+    workdir: str = Field(default="")
+    files_modified: list[str] = Field(default_factory=list)
+    raw_log: str = Field(default="")
