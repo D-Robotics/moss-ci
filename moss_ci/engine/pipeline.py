@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import Optional
 from moss_ci.models.pipeline import SuiteConfig
 from moss_ci.models.result import PipelineResult
 from moss_ci.engine.scheduler import Scheduler
@@ -14,10 +15,10 @@ class PipelineConfig:
 
 
 class PipelineEngine:
-    def __init__(self, config: PipelineConfig | None = None):
+    def __init__(self, config: PipelineConfig | None = None, runner=None):
         self.config = config or PipelineConfig()
         self._scheduler = Scheduler()
-        self._executor = Executor(max_concurrency=self.config.max_concurrency)
+        self._executor = Executor(max_concurrency=self.config.max_concurrency, runner=runner)
 
     async def run(self, suites: list[SuiteConfig]) -> PipelineResult:
         plan = self._scheduler.plan(suites)

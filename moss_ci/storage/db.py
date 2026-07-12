@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker, AsyncEngine
 from moss_ci.storage.models import Base
 
@@ -7,11 +8,16 @@ _db_instance: Database | None = None
 
 class Database:
     def __init__(self, url: str = ""):
-        self.url = url or "sqlite+aiosqlite:///moss_ci.db"
+        # Explicit url wins; else env var; else default file SQLite.
+        self.url = url or os.environ.get("MOSS_CI_DB_URL", "") or "sqlite+aiosqlite:///moss_ci.db"
         self.engine: AsyncEngine | None = None
         self.session_factory: async_sessionmaker[AsyncSession] | None = None
 
     async def init(self):
+        # Idempotent: safe to call from lifespan AND from request paths
+        # (e.g. tests via httpx ASGITransport, which does not fire lifespan).
+        if self.session_factory is not None:
+            return
         self.engine = create_async_engine(self.url, echo=False)
         self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False)
         async with self.engine.begin() as conn:

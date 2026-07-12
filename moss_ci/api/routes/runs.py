@@ -4,15 +4,22 @@ from fastapi.responses import StreamingResponse
 import asyncio, json
 from moss_ci.api.schemas import RunPipelineRequest, RunPipelineResponse
 from moss_ci.engine.pipeline import PipelineEngine, PipelineConfig
+from moss_ci.runner.base import MossRunner
 from moss_ci.parser.yaml_parser import parse_suite_string
 from moss_ci.models.result import PipelineResult, RunStatus
+from moss_ci.storage.db import get_db
+from moss_ci.storage.repository import RunRepository
 import yaml
 
 router = APIRouter(prefix="/api/v1")
-# SCAFFOLD ONLY: in-memory store. The RunRepository built in Task 8 (PostgreSQL)
-# is NOT wired in here yet — that switchover is Task 16. Tests in Task 10/11 pass
-# against this in-memory store; once Task 16 lands, replace _runs with the repo.
-_runs: dict[str, PipelineResult] = {}
+
+
+async def _repo() -> RunRepository:
+    # Ensure the DB is initialized even when the lifespan didn't fire
+    # (e.g. httpx ASGITransport in tests). init() is idempotent.
+    db = get_db()
+    await db.init()
+    return RunRepository(db)
 
 
 def _dict_to_suite(data: dict):
@@ -24,27 +31,33 @@ def _dict_to_suite(data: dict):
 async def run_pipeline(req: RunPipelineRequest):
     run_id = str(uuid.uuid4())[:8]
     suites = [_dict_to_suite(s) for s in req.suites]
-    engine = PipelineEngine(PipelineConfig(pipeline_name=req.pipeline_name))
+    # Switchover: pass a real MossRunner (auto-detects backend from env).
+    # Pass runner=None to keep scaffold behavior during local dev if desired.
+    runner = MossRunner()
+    engine = PipelineEngine(PipelineConfig(pipeline_name=req.pipeline_name), runner=runner)
     result = await engine.run(suites)
     result.run_id = run_id
-    _runs[run_id] = result
+    repo = await _repo()
+    await repo.save(result)
     return RunPipelineResponse(run_id=run_id, pipeline_name=req.pipeline_name, status=result.status.value)
 
 
 @router.get("/runs/{run_id}")
 async def get_run(run_id: str):
-    if run_id not in _runs:
+    repo = await _repo()
+    result = await repo.get(run_id)
+    if result is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    result = _runs[run_id]
     return result.model_dump()
 
 
 @router.get("/runs/{run_id}/logs")
 async def get_run_logs(run_id: str):
-    if run_id not in _runs:
+    repo = await _repo()
+    result = await repo.get(run_id)
+    if result is None:
         raise HTTPException(status_code=404, detail="Run not found")
     async def event_stream():
-        result = _runs[run_id]
         for suite in result.suites:
             for test in suite.tests:
                 yield f"data: {json.dumps({'test': test.test_name, 'status': test.status})}\n\n"
@@ -55,27 +68,31 @@ async def get_run_logs(run_id: str):
 
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(run_id: str):
-    if run_id not in _runs:
+    repo = await _repo()
+    result = await repo.get(run_id)
+    if result is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    _runs[run_id].status = RunStatus.CANCELLED
+    result.status = RunStatus.CANCELLED
+    await repo.save(result)
     return {"run_id": run_id, "status": "cancelled"}
 
 
 @router.get("/runs")
 async def list_runs(limit: int = 20, offset: int = 0):
-    all_runs = list(_runs.values())
-    all_runs.sort(key=lambda r: r.created_at, reverse=True)
-    page = all_runs[offset:offset + limit]
-    return [r.model_dump() for r in page]
+    repo = await _repo()
+    results = await repo.list(limit=limit, offset=offset)
+    return [r.model_dump() for r in results]
 
 
 @router.get("/runs/{run_id}/diff")
 async def diff_run(run_id: str):
-    if run_id not in _runs:
+    repo = await _repo()
+    current = await repo.get(run_id)
+    if current is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    current = _runs[run_id]
-    all_runs = sorted([r for r in _runs.values() if r.run_id != run_id], key=lambda r: r.created_at, reverse=True)
-    previous = all_runs[0] if all_runs else None
+    all_runs = await repo.list(limit=1000)
+    previous_runs = sorted([r for r in all_runs if r.run_id != run_id], key=lambda r: r.created_at, reverse=True)
+    previous = previous_runs[0] if previous_runs else None
     diff = {"new_failures": [], "fixed": [], "improved": [], "degraded": []}
     if previous:
         for cur_suite in current.suites:
@@ -93,10 +110,12 @@ async def diff_run(run_id: str):
 
 @router.get("/runs/{run_id}/tests")
 async def list_tests(run_id: str):
-    if run_id not in _runs:
+    repo = await _repo()
+    result = await repo.get(run_id)
+    if result is None:
         raise HTTPException(status_code=404, detail="Run not found")
     tests = []
-    for suite in _runs[run_id].suites:
+    for suite in result.suites:
         for test in suite.tests:
             tests.append({"suite_name": suite.suite_name, **test.model_dump()})
     return tests
@@ -104,9 +123,11 @@ async def list_tests(run_id: str):
 
 @router.get("/runs/{run_id}/tests/{test_name}")
 async def get_test_detail(run_id: str, test_name: str):
-    if run_id not in _runs:
+    repo = await _repo()
+    result = await repo.get(run_id)
+    if result is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    for suite in _runs[run_id].suites:
+    for suite in result.suites:
         for test in suite.tests:
             if test.test_name == test_name:
                 return {"suite_name": suite.suite_name, **test.model_dump()}
@@ -115,8 +136,9 @@ async def get_test_detail(run_id: str, test_name: str):
 
 @router.get("/suites")
 async def list_suites():
+    repo = await _repo()
     suite_names = set()
-    for run in _runs.values():
+    for run in await repo.list(limit=1000):
         for suite in run.suites:
             suite_names.add(suite.suite_name)
     return list(suite_names)
@@ -124,8 +146,9 @@ async def list_suites():
 
 @router.get("/suites/{name}/history")
 async def suite_history(name: str, limit: int = 20):
+    repo = await _repo()
     history = []
-    for run in sorted(_runs.values(), key=lambda r: r.created_at, reverse=True):
+    for run in sorted(await repo.list(limit=1000), key=lambda r: r.created_at, reverse=True):
         for suite in run.suites:
             if suite.suite_name == name:
                 history.append({"run_id": run.run_id, "date": run.created_at.isoformat(), "passed": suite.passed, "failed": suite.failed, "total": suite.total})
