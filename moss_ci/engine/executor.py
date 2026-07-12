@@ -134,6 +134,12 @@ class Executor:
         if test_plan.test.flake_detection is not None:
             from moss_ci.engine.flake import FlakeDetector
             return await FlakeDetector().detect(test_plan, self)
+        return await self._run_test_once(test_plan)
+
+    async def _run_test_once(self, test_plan: TestPlan) -> TestResult:
+        # Single non-flake execution. FlakeDetector calls THIS (not
+        # _execute_test) so re-running a flake test doesn't re-trigger the
+        # flake branch → infinite recursion.
         start = time.monotonic()
         test = test_plan.test
         try:

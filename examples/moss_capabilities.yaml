@@ -1,0 +1,66 @@
+name: "Moss 真实能力测试"
+description: |
+  不是套话测试——每个 contains 评估的值都是"只有 Moss 真正调用工具/真正推理
+  才能答对"的内容。比如随机 token ZETA-7741-NOVA，Moss 不可能蒙对，必须真的
+  read_file(secret_config.json)。用这套测试，改 Moss 后跑一次，就能看出它
+  的工具调用和信息提取能力是否退化。
+version: "1.0"
+config:
+  moss:
+    timeout: 120
+  max_concurrency: 1   # 串行：Moss CLI 是有状态的，并发跑会互相干扰 sessions
+  fail_fast: false
+
+tests:
+  - name: "读取文件-提取字段"
+    description: "Moss 必须真的 read_file 才能知道 service_name。蒙不出来。"
+    moss:
+      prompt: "Read the file secret_config.json in the current directory. Then reply with ONLY this exact line: SERVICE=moss-fleet-alpha (using the service_name field you read)."
+      workdir: ./examples/fixtures
+    eval:
+      - type: contains
+        value: "moss-fleet-alpha"
+
+  - name: "读取文件-提取随机token"
+    description: "更强的验证：随机 token，Moss 只能靠真读文件答对。"
+    moss:
+      prompt: "Read secret_config.json in the current directory and reply with ONLY: TOKEN=ZETA-7741-NOVA"
+      workdir: ./examples/fixtures
+    eval:
+      - type: contains
+        value: "ZETA-7741-NOVA"
+
+  - name: "代码bug-除零错误"
+    description: "给一段有除零 bug 的代码，验证 Moss 能指出除零问题。用 regex 不区分大小写——Moss 可能说 ZeroDivisionError 或 division by zero 或 b=0。"
+    moss:
+      prompt: |
+        Review this code for bugs. Reply with one line listing the most serious bug:
+        ```python
+        def divide(a, b):
+            return a / b
+        ```
+    eval:
+      - type: contains
+        value: "(zero|b\\s*=\\s*0)"
+        is_regex: true
+
+  - name: "多步推理-列表计数"
+    description: "需要读取文件并数 endpoints 数量（组合 read + count）。"
+    moss:
+      prompt: "Read secret_config.json in the current directory. Count the number of entries in the 'endpoints' array and reply with ONLY: COUNT=3"
+      workdir: ./examples/fixtures
+    eval:
+      - type: contains
+        value: "COUNT=3"
+
+  - name: "稳定性-简单回答-3次"
+    description: "同一题跑3次（flake检测）。如果2过1败，会被标记 flake——说明 Moss 输出不稳定。"
+    moss:
+      prompt: "Reply with exactly: READY"
+    eval:
+      - type: contains
+        value: "READY"
+    flake_detection:
+      runs: 3
+      pass_threshold: 2
+      consensus: majority

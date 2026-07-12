@@ -9,8 +9,11 @@ class FlakeDetector:
     async def detect(self, plan: TestPlan, executor) -> TestResult:
         flake = plan.test.flake_detection
         runs: list[TestResult] = []
+        # Call the single-run path, NOT _execute_test — otherwise re-running
+        # a flake test re-enters the flake branch and recurses infinitely.
+        run_once = getattr(executor, "_run_test_once", executor._execute_test)
         for i in range(flake.runs):
-            result = await executor._execute_test(plan)
+            result = await run_once(plan)
             runs.append(result)
         passed_count = sum(1 for r in runs if r.status == "pass")
         if flake.consensus == "unanimous":
