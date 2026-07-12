@@ -11,10 +11,13 @@ logger = structlog.get_logger(__name__)
 class CLIBackend(MossBackend):
     def __init__(self, moss_command: str = "moss"):
         # moss_command may be a bare command ("moss") OR a command with leading
-        # args ("node /abs/path/cli.js"). Tokenize so MOSS_CLI_COMMAND can point
-        # at an interpreter + script, not just a PATH-resolved binary.
+        # args ("node /abs/path/cli.js --config-file C:/..."). Tokenize so
+        # MOSS_CLI_COMMAND can point at an interpreter + script, not just a
+        # PATH-resolved binary. Use posix=False on Windows so backslashes in
+        # Windows paths (C:\Users\...) aren't eaten as shell escapes —
+        # posix=True turns 'C:\Users\t' into 'C:Userst', corrupting the path.
         self.moss_command = moss_command
-        self._cmd_prefix = shlex.split(moss_command)
+        self._cmd_prefix = shlex.split(moss_command, posix=not os.name == "nt")
 
     async def run(self, spec: MossCallSpec, timeout: int = 300) -> MossResult:
         start = time.monotonic()
