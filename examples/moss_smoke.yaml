@@ -1,0 +1,38 @@
+name: "Moss 真实冒烟"
+description: "对真实 Moss CLI 跑的最基础回归测试——验证 Moss 能被调用且回复正确"
+version: "1.0"
+config:
+  moss:
+    timeout: 120
+tests:
+  - name: "echo-hello-world"
+    description: "最基础：Moss 能回复指定文本"
+    moss:
+      prompt: "Reply with exactly the words: hello world. Nothing else."
+    eval:
+      - type: contains
+        value: "hello world"
+
+  - name: "math-addition"
+    description: "基础数学：验证推理能力"
+    moss:
+      prompt: "What is 2 plus 3? Reply with just the number."
+    eval:
+      - type: contains
+        value: "5"
+
+  - name: "echo-apple"
+    description: "再次验证精确输出"
+    moss:
+      prompt: "Reply with exactly the word: apple. Nothing else."
+    eval:
+      - type: contains
+        value: "apple"
+
+  - name: "identify-capital"
+    description: "知识问答"
+    moss:
+      prompt: "What is the capital of France? Reply with just the city name."
+    eval:
+      - type: contains
+        value: "Paris"

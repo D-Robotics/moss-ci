@@ -4,6 +4,7 @@ from rich.console import Console
 from rich.table import Table
 from moss_ci.parser.yaml_parser import parse_suite, parse_suite_string
 from moss_ci.engine.pipeline import PipelineEngine, PipelineConfig
+from moss_ci.runner.base import MossRunner
 
 app = typer.Typer(name="moss-ci", help="Moss CI — AI Agent Evaluation Platform")
 console = Console()
@@ -15,6 +16,7 @@ def run(
     test_name: str = typer.Option(None, "--test", help="Run a specific test"),
     fail_fast: bool = typer.Option(True, "--fail-fast/--no-fail-fast"),
     concurrency: int = typer.Option(10, "--concurrency", "-c"),
+    mock: bool = typer.Option(False, "--mock", help="Use mock Moss output (no real Moss invoked)"),
 ):
     """Run test suites."""
     p = Path(path)
@@ -38,8 +40,14 @@ def run(
     if not suites:
         raise typer.Exit(1)
 
+    # mock=False (default) invokes a real MossRunner that auto-detects the
+    # backend from env (MOSS_CLI_COMMAND / MOSS_API_URL / moss SDK).
+    # --mock keeps the scaffold behavior ([mock] Moss: <prompt>) for runs
+    # where no Moss instance is available.
+    runner = None if mock else MossRunner()
+
     async def _run():
-        engine = PipelineEngine(PipelineConfig(fail_fast=fail_fast, max_concurrency=concurrency))
+        engine = PipelineEngine(PipelineConfig(fail_fast=fail_fast, max_concurrency=concurrency), runner=runner)
         return await engine.run(suites)
 
     console.print(f"\nRunning {sum(len(s.tests) for s in suites)} tests across {len(suites)} suites...\n")

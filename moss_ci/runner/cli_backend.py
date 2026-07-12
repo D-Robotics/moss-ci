@@ -10,16 +10,21 @@ logger = structlog.get_logger(__name__)
 
 class CLIBackend(MossBackend):
     def __init__(self, moss_command: str = "moss"):
+        # moss_command may be a bare command ("moss") OR a command with leading
+        # args ("node /abs/path/cli.js"). Tokenize so MOSS_CLI_COMMAND can point
+        # at an interpreter + script, not just a PATH-resolved binary.
         self.moss_command = moss_command
+        self._cmd_prefix = shlex.split(moss_command)
 
     async def run(self, spec: MossCallSpec, timeout: int = 300) -> MossResult:
         start = time.monotonic()
         prompt = spec.prompt or spec.task or ""
         # shlex.split so that ``bash -c 'echo $X'`` parses into the right
-        # argv ([bash, -c, echo $X]) instead of being passed as one arg.
-        # create_subprocess_exec does not invoke a shell, so prompt text
-        # must be tokenized here.
-        cmd = [self.moss_command, *shlex.split(prompt)]
+        # argv ([bash, -c, echo $X]) instead of one arg. create_subprocess_exec
+        # does not invoke a shell, so prompt text must be tokenized here.
+        # (For real Moss, multi-word prompts split into several argv — Moss
+        # concatenates argv back into one prompt, verified empirically.)
+        cmd = [*self._cmd_prefix, *shlex.split(prompt)]
         env = {**os.environ, **spec.env}
         cwd = str(Path(spec.workdir).resolve()) if spec.workdir else None
         try:
