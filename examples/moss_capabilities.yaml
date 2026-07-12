@@ -13,18 +13,18 @@ config:
 
 tests:
   - name: "读取文件-提取字段"
-    description: "Moss 必须真的 read_file 才能知道 service_name。蒙不出来。"
+    description: "Moss 必须真的 read_file 才能知道 service_name。prompt 不含答案，蒙不出来。"
     moss:
-      prompt: "Read the file secret_config.json in the current directory. Then reply with ONLY this exact line: SERVICE=moss-fleet-alpha (using the service_name field you read)."
+      prompt: "Read the file secret_config.json in the current directory. Reply with ONLY the value of the service_name field."
       workdir: ./examples/fixtures
     eval:
       - type: contains
         value: "moss-fleet-alpha"
 
   - name: "读取文件-提取随机token"
-    description: "更强的验证：随机 token，Moss 只能靠真读文件答对。"
+    description: "更强的验证：随机 token，prompt 不含它，Moss 只能靠真读文件答对。"
     moss:
-      prompt: "Read secret_config.json in the current directory and reply with ONLY: TOKEN=ZETA-7741-NOVA"
+      prompt: "Read secret_config.json in the current directory and reply with ONLY the value of the secret_token field."
       workdir: ./examples/fixtures
     eval:
       - type: contains
