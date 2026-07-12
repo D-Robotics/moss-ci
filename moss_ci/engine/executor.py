@@ -87,6 +87,9 @@ class Executor:
         )
 
     async def _execute_test(self, test_plan: TestPlan) -> TestResult:
+        if test_plan.test.flake_detection is not None:
+            from moss_ci.engine.flake import FlakeDetector
+            return await FlakeDetector().detect(test_plan, self)
         # SCAFFOLD: Moss output is mocked here. The real MossRunner (built in
         # Tasks 5-6) is NOT yet wired in — that switchover is Task 16.
         # Until then, contains/tool_sequence/tool_args evaluators are
