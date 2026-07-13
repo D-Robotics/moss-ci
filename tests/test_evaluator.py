@@ -74,6 +74,27 @@ class TestSideEffectEvaluator:
             SideEffectSpec(type="side_effect", check="exit_code"), "", [], exit_code=0)
         assert r.passed is True
 
+    @pytest.mark.asyncio
+    async def test_tests_pass_case_insensitive(self):
+        # Moss says "4 tests pass" / "all passed", not pytest's "PASSED" banner.
+        ev = SideEffectEvaluator()
+        r1 = await ev.evaluate(SideEffectSpec(type="side_effect", check="tests_pass"),
+                               "All 4 tests pass now.", [])
+        r2 = await ev.evaluate(SideEffectSpec(type="side_effect", check="tests_pass"),
+                               "tests passed", [])
+        r3 = await ev.evaluate(SideEffectSpec(type="side_effect", check="tests_pass"),
+                               "still broken", [])
+        assert r1.passed is True
+        assert r2.passed is True
+        assert r3.passed is False
+
+    @pytest.mark.asyncio
+    async def test_tests_fail_case_insensitive(self):
+        ev = SideEffectEvaluator()
+        r = await ev.evaluate(SideEffectSpec(type="side_effect", check="tests_fail"),
+                              "the tests failed", [])
+        assert r.passed is True
+
 
 class TestEvaluatorRegistry:
     @pytest.mark.asyncio

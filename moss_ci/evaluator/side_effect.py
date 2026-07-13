@@ -13,10 +13,16 @@ class SideEffectEvaluator(BaseEvaluator):
             passed = len(files_modified or []) > 0
             return EvalResult(type="side_effect", passed=passed, details={"check": "file_created"})
         elif spec.check == "tests_pass":
-            passed = "PASSED" in moss_output or "OK" in moss_output
+            # Case-insensitive: Moss says "4 tests pass" / "all passed",
+            # not pytest's "PASSED" banner. Match "pass" (covers pass/passed/
+            # passing). Don't match "ok" alone — it appears as a substring
+            # in words like "broken", causing false positives.
+            lowered = moss_output.lower()
+            passed = "pass" in lowered
             return EvalResult(type="side_effect", passed=passed, details={"check": "tests_pass"})
         elif spec.check == "tests_fail":
-            passed = "FAILED" in moss_output or "FAIL" in moss_output
+            lowered = moss_output.lower()
+            passed = ("fail" in lowered) or ("error" in lowered)
             return EvalResult(type="side_effect", passed=passed, details={"check": "tests_fail"})
         elif spec.check == "exit_code":
             return EvalResult(type="side_effect", passed=exit_code == 0, details={"check": "exit_code", "exit_code": exit_code})
