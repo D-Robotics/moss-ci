@@ -15,9 +15,16 @@ class TestCLIBackend:
         assert result.exit_code == 0
 
     @pytest.mark.asyncio
-    async def test_run_with_env(self):
-        backend = CLIBackend(moss_command="bash")
-        spec = MossCallSpec(prompt="-c 'echo $MY_VAR'", env={"MY_VAR": "testval"})
+    async def test_run_with_env(self, tmp_path):
+        # Verify spec.env is injected into the subprocess environment.
+        # Use a tiny script that prints an env var (not bash -c, since the
+        # backend now inserts `--` to stop flag parsing, which would make
+        # bash treat -c as a filename).
+        script = tmp_path / "echo_env.py"
+        script.write_text("import os, sys; sys.stdout.write(os.environ.get('MY_VAR', ''))", encoding="utf-8")
+        import sys
+        backend = CLIBackend(moss_command=f"{sys.executable} {script}")
+        spec = MossCallSpec(prompt="ignored", env={"MY_VAR": "testval"})
         result = await backend.run(spec)
         assert "testval" in result.output
 

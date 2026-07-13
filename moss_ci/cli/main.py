@@ -18,6 +18,7 @@ console = Console()
 def run(
     path: str = typer.Argument("./suites", help="Suite file or directory"),
     test_name: str = typer.Option(None, "--test", help="Run a specific test"),
+    tag: str = typer.Option(None, "--tag", help="Run only tests with this tag (e.g. quick / full)"),
     fail_fast: bool = typer.Option(True, "--fail-fast/--no-fail-fast"),
     concurrency: int = typer.Option(10, "--concurrency", "-c"),
     mock: bool = typer.Option(False, "--mock", help="Use mock Moss output (no real Moss invoked)"),
@@ -43,6 +44,19 @@ def run(
 
     if not suites:
         raise typer.Exit(1)
+
+    # Tag filtering: keep only tests carrying the requested tag. Used by CI
+    # to split a suite into a fast layer (push) and a full layer (nightly).
+    if tag:
+        kept = 0
+        for s in suites:
+            s.tests = [t for t in s.tests if tag in t.tags]
+            kept += len(s.tests)
+        suites = [s for s in suites if s.tests]
+        if not suites:
+            console.print(f"[yellow]No tests matched tag '{tag}'.[/yellow]")
+            raise typer.Exit(1)
+        console.print(f"[dim]Filtered to tag '{tag}': {kept} test(s)[/dim]")
 
     # mock=False (default) invokes a real MossRunner that auto-detects the
     # backend from env (MOSS_CLI_COMMAND / MOSS_API_URL / moss SDK).

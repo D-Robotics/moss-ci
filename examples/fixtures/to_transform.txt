@@ -1,0 +1,6 @@
+name: alpha
+value: 42
+items:
+  - one
+  - two
+  - three

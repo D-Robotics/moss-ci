@@ -1,75 +1,28 @@
-name: "Moss 真实能力测试"
+name: "Moss 工业级能力测试"
 description: |
-  不是套话测试——每个 contains 评估的值都是"只有 Moss 真正调用工具/真正推理
-  才能答对"的内容。比如随机 token ZETA-7741-NOVA，Moss 不可能蒙对，必须真的
-  read_file(secret_config.json)。用这套测试，改 Moss 后跑一次，就能看出它
-  的工具调用和信息提取能力是否退化。
-version: "1.0"
+  覆盖 Moss 作为 agent harness 的核心能力维度：工具调用（read/write/edit/patch）+
+  文件操作副作用 + 多步端到端任务 + 代码理解推理 + 输出稳定性 + 回答质量。
+  每个测试的期望值都是"Moss 只能靠真本事答对"的内容（答案不暴露在 prompt 里）。
+
+  分两层：
+    quick —— 单轮单工具测试，每次 push 跑（~2-3 分钟）。关键测试加 flake 多轮。
+    full  —— 多步端到端任务，手动 / 夜间跑（不计成本），含 flake 多轮。
+  用 `moss-ci run ... --tag quick` 或 `--tag full` 分层跑。
+
+version: "2.0"
 config:
   moss:
-    timeout: 120
-  max_concurrency: 1   # 串行：Moss CLI 是有状态的，并发跑会互相干扰 sessions
+    timeout: 180
+  max_concurrency: 1   # Moss CLI 有状态，串行避免 session 冲突
   fail_fast: false
 
 tests:
-  - name: "读取文件-提取字段"
-    description: "Moss 必须真的 read_file 才能知道 service_name。prompt 不含答案，蒙不出来。"
-    moss:
-      prompt: "Read the file secret_config.json in the current directory. Reply with ONLY the value of the service_name field."
-      workdir: ./examples/fixtures
-    eval:
-      - type: contains
-        value: "moss-fleet-alpha"
-
-  - name: "读取文件-提取随机token"
-    description: "更强的验证：随机 token，prompt 不含它，Moss 只能靠真读文件答对。"
-    moss:
-      prompt: "Read secret_config.json in the current directory and reply with ONLY the value of the secret_token field."
-      workdir: ./examples/fixtures
-    eval:
-      - type: contains
-        value: "ZETA-7741-NOVA"
-
-  - name: "代码bug-除零错误"
-    description: "给一段有除零 bug 的代码，验证 Moss 能指出除零问题。用 regex 不区分大小写——Moss 可能说 ZeroDivisionError 或 division by zero 或 b=0。"
-    moss:
-      prompt: |
-        Review this code for bugs. Reply with one line listing the most serious bug:
-        ```python
-        def divide(a, b):
-            return a / b
-        ```
-    eval:
-      - type: contains
-        value: "(zero|b\\s*=\\s*0)"
-        is_regex: true
-
-  - name: "多步推理-列表计数"
-    description: "需要读取文件并数 endpoints 数量（组合 read + count）。"
-    moss:
-      prompt: "Read secret_config.json in the current directory. Count the number of entries in the 'endpoints' array and reply with ONLY: COUNT=3"
-      workdir: ./examples/fixtures
-    eval:
-      - type: contains
-        value: "COUNT=3"
-
-  - name: "稳定性-简单回答-3次"
-    description: "同一题跑3次（flake检测）。如果2过1败，会被标记 flake——说明 Moss 输出不稳定。"
-    moss:
-      prompt: "Reply with exactly: READY"
-    eval:
-      - type: contains
-        value: "READY"
-    flake_detection:
-      runs: 3
-      pass_threshold: 2
-      consensus: majority
-
-  - name: "工具调用-顺序与参数"
-    description: |
-      验证 Moss 真的调了 read_file 工具，且传的 path 参数含 secret_config。
-      这测的是工具调用能力本身——不是回答对不对，而是会不会调工具、参数对不对。
-      moss-ci 从 Moss 的 session jsonl 提取结构化 tool_use 来评估。
+  # ============================================================
+  # A. 工具调用面（tool_sequence + tool_args）—— tag: quick
+  # ============================================================
+  - name: "A1-read_file调用与参数"
+    tags: [quick]
+    description: "验证 Moss 调了 read_file 且 path 含 secret_config。从 session 提取 tool_use 评估。"
     moss:
       prompt: "Read the file secret_config.json in the current directory, then reply: OK"
       workdir: ./examples/fixtures
@@ -82,3 +35,198 @@ tests:
         tool: read_file
         contains:
           path: "secret_config"
+
+  - name: "A2-write_file调用与参数"
+    tags: [quick]
+    description: "让 Moss 写一个文件，验证调了 write_file 且 path/content 参数对。"
+    moss:
+      prompt: "Create a file named hello.txt in the current directory with the content: greeting"
+      workdir: ./examples/fixtures
+    eval:
+      - type: tool_sequence
+        expected:
+          - tool: write_file
+        order: strict
+      - type: tool_args
+        tool: write_file
+        contains:
+          path: "hello.txt"
+
+  - name: "A3-多工具序列read-then-write"
+    tags: [quick]
+    description: "读 secret_config.json 再写一个文件，验证 read_file 后跟 write_file 的顺序。"
+    moss:
+      prompt: "Read secret_config.json in the current directory, then write a file named summary.txt containing the word done"
+      workdir: ./examples/fixtures
+    eval:
+      - type: tool_sequence
+        expected:
+          - tool: read_file
+          - tool: write_file
+        order: strict
+
+  # ============================================================
+  # B. 文件操作副作用（side_effect）—— tag: full
+  # ============================================================
+  - name: "B1-写文件副作用"
+    tags: [full]
+    description: "让 Moss 写文件，side_effect 检查 files_modified 含目标文件。"
+    moss:
+      prompt: "Create a file named marker.txt in the current directory with content: created"
+      workdir: ./examples/fixtures
+    eval:
+      - type: side_effect
+        check: file_modified
+        target: "marker.txt"
+      - type: tool_sequence
+        expected:
+          - tool: write_file
+        order: strict
+
+  - name: "B2-改文件副作用"
+    tags: [full]
+    description: "让 Moss 改已有文件，side_effect 检查 files_modified 含目标。"
+    moss:
+      prompt: "Edit the file to_transform.txt in the current directory to add a new item 'four' under the items list"
+      workdir: ./examples/fixtures
+    eval:
+      - type: side_effect
+        check: file_modified
+        target: "to_transform.txt"
+
+  # ============================================================
+  # C. 多步端到端任务 —— tag: full（Moss 核心价值）
+  # ============================================================
+  - name: "C1-自主修bug端到端"
+    tags: [full]
+    description: |
+      给 buggy.py（subtract 返回 a+b）+ test_buggy.py（失败）。Moss 自主完成
+      读代码→找 bug→改→跑 pytest→确认通过。side_effect tests_pass 验证。
+      这是 Moss 作为 agent 的核心能力——端到端自主完成任务。
+    moss:
+      task: "In the current directory there is a Python file buggy.py with a bug (its tests in test_buggy.py fail). Read buggy.py, find the bug, fix it so all tests pass, then run `python -m pytest test_buggy.py` to confirm."
+      workdir: ./examples/fixtures
+    eval:
+      - type: side_effect
+        check: tests_pass
+    flake_detection:
+      runs: 3
+      pass_threshold: 2
+      consensus: majority
+
+  - name: "C2-读处理写链路"
+    tags: [full]
+    description: "读 to_transform.txt，提取 name 字段值，写到 result.txt。验证写出的文件含 alpha。"
+    moss:
+      task: "Read the file to_transform.txt in the current directory. Extract the value of the 'name' field. Write it into a new file named result.txt in the current directory."
+      workdir: ./examples/fixtures
+    eval:
+      - type: side_effect
+        check: file_modified
+        target: "result.txt"
+    flake_detection:
+      runs: 3
+      pass_threshold: 2
+      consensus: majority
+
+  # ============================================================
+  # D. 代码理解 + 推理（contains）—— tag: quick
+  # ============================================================
+  - name: "D1-代码bug除零"
+    tags: [quick]
+    description: "找除零 bug。regex 不区分大小写——Moss 可能说 ZeroDivisionError/division by zero/b=0。"
+    moss:
+      prompt: |
+        Review this code for bugs. Reply with one line listing the most serious bug:
+        ```python
+        def divide(a, b):
+            return a / b
+        ```
+    eval:
+      - type: contains
+        value: "(zero|b\\s*=\\s*0)"
+        is_regex: true
+
+  - name: "D2-代码bug空值处理"
+    tags: [quick]
+    description: "找空列表索引 bug。Moss 应指出 list 可能空 + 索引越界。"
+    moss:
+      prompt: |
+        Review this code for bugs. Reply with one line listing the most serious bug:
+        ```python
+        def first(items):
+            return items[0]
+        ```
+    eval:
+      - type: contains
+        value: "(empty|index|indexerror|out of range|0\b)"
+        is_regex: true
+
+  - name: "D3-多步推理列表计数"
+    tags: [quick]
+    description: "读 secret_config.json 数 endpoints 数组长度。prompt 不含答案（让 Moss 真数）。"
+    moss:
+      prompt: "Read secret_config.json in the current directory. Count the number of entries in the 'endpoints' array and reply with ONLY: COUNT=<the number>"
+      workdir: ./examples/fixtures
+    eval:
+      - type: contains
+        value: "COUNT=3"
+
+  # ============================================================
+  # E. 稳定性（flake_detection）—— tag: quick
+  # ============================================================
+  - name: "E1-简单回答稳定性"
+    tags: [quick]
+    description: "同一题跑3次。Moss 输出忽好忽坏会被标记 flake。"
+    moss:
+      prompt: "Reply with exactly: READY"
+    eval:
+      - type: contains
+        value: "READY"
+    flake_detection:
+      runs: 3
+      pass_threshold: 2
+      consensus: majority
+
+  - name: "E2-信息提取稳定性"
+    tags: [quick]
+    description: "读文件提取字段，跑3次。Moss 读文件能力忽稳定忽不稳定会被标记 flake。"
+    moss:
+      prompt: "Read the file secret_config.json in the current directory. Reply with ONLY the value of the service_name field."
+      workdir: ./examples/fixtures
+    eval:
+      - type: contains
+        value: "moss-fleet-alpha"
+    flake_detection:
+      runs: 3
+      pass_threshold: 2
+      consensus: majority
+
+  # ============================================================
+  # F. 质量评估（llm_judge）—— tag: quick
+  # ============================================================
+  - name: "F1-代码review质量"
+    tags: [quick]
+    description: |
+      让 Moss review 一段有除零 bug 的代码，llm_judge 按 rubric 打分。
+      需配 MOSS_CI_JUDGE_API_URL（OpenAI 兼容）。无 judge URL 时默认 3.0。
+    moss:
+      prompt: |
+        Review this code and explain the bug and how to fix it:
+        ```python
+        def divide(a, b):
+            return a / b
+        ```
+    eval:
+      - type: llm_judge
+        rubric: |
+          Score 1-5 whether the review:
+          1. Correctly identifies the division-by-zero bug
+          2. Suggests a concrete fix (e.g. check b==0, try/except)
+          3. Is clear and concise
+          Reply JSON: {"score": <1-5>}
+        threshold: 3.0
+    flake_detection:
+      runs: 3
+      pass_threshold: 2
+      consensus: majority

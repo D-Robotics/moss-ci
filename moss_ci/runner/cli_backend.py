@@ -77,15 +77,38 @@ class CLIBackend(MossBackend):
             return []
         return self._parse_tool_calls(d / new_sessions[-1])
 
+    # Tools that modify files — their input.path tells us what Moss changed.
+    _FILE_WRITE_TOOLS = {"write_file", "edit_file", "apply_patch", "move_file"}
+
+    def _extract_files_modified(self, tool_calls: list[dict]) -> list[str]:
+        """Derive files_modified from tool calls. Moss's session jsonl records
+        every tool_use with its input; for write/edit/patch/move the input
+        carries a `path` (move_file also has `destination`). Collect those so
+        the side_effect evaluator (file_modified) has something to check.
+        """
+        modified: list[str] = []
+        for tc in tool_calls:
+            if tc.get("tool") not in self._FILE_WRITE_TOOLS:
+                continue
+            args = tc.get("args") or {}
+            path = args.get("path") or args.get("file_path")
+            if path:
+                modified.append(path)
+            # move_file moves to a destination too
+            dest = args.get("destination") or args.get("to")
+            if dest:
+                modified.append(dest)
+        return modified
+
     async def run(self, spec: MossCallSpec, timeout: int = 300) -> MossResult:
         start = time.monotonic()
         prompt = spec.prompt or spec.task or ""
-        # shlex.split so that ``bash -c 'echo $X'`` parses into the right
-        # argv ([bash, -c, echo $X]) instead of one arg. create_subprocess_exec
-        # does not invoke a shell, so prompt text must be tokenized here.
-        # (For real Moss, multi-word prompts split into several argv — Moss
-        # concatenates argv back into one prompt, verified empirically.)
-        cmd = [*self._cmd_prefix, *shlex.split(prompt)]
+        # Insert `--` so prompt text isn't parsed as Moss flags. A prompt
+        # containing e.g. `python -m pytest` would otherwise treat `-m` as
+        # Moss's --model short flag ("model=pytest" → HTTP 400). Everything
+        # after `--` is positional argv, which Moss concatenates into the
+        # prompt. (bash -c 'echo $X' still tokenizes correctly via shlex.)
+        cmd = [*self._cmd_prefix, "--", *shlex.split(prompt)]
         env = {**os.environ, **spec.env}
         cwd = str(Path(spec.workdir).resolve()) if spec.workdir else None
         # Snapshot existing sessions so we can find the NEW one Moss writes.
@@ -98,8 +121,10 @@ class CLIBackend(MossBackend):
             output = stdout.decode("utf-8", errors="replace")
             raw_log = output + ("\n[stderr]\n" + stderr.decode("utf-8", errors="replace") if stderr else "")
             tool_calls = self._extract_tool_calls(cwd, sessions_before)
+            files_modified = self._extract_files_modified(tool_calls)
             return MossResult(output=output.strip(), tool_calls=tool_calls, exit_code=process.returncode or 0,
-                              duration=time.monotonic() - start, workdir=spec.workdir or "", raw_log=raw_log)
+                              duration=time.monotonic() - start, workdir=spec.workdir or "",
+                              files_modified=files_modified, raw_log=raw_log)
         except asyncio.TimeoutError:
             return MossResult(output="", exit_code=-1, duration=time.monotonic() - start,
                               raw_log=f"Timeout after {timeout}s")

@@ -88,3 +88,39 @@ class TestExtractToolCallsNewSession:
         backend = CLIBackend(moss_command="moss")
         # no .moss/sessions in cwd -> no crash, empty
         assert backend._extract_tool_calls(str(tmp_path), set()) == []
+
+
+class TestExtractFilesModified:
+    def test_write_file_path_collected(self):
+        backend = CLIBackend(moss_command="moss")
+        calls = [{"tool": "write_file", "args": {"path": "out.txt", "content": "x"}}]
+        assert backend._extract_files_modified(calls) == ["out.txt"]
+
+    def test_edit_and_patch_collected(self):
+        backend = CLIBackend(moss_command="moss")
+        calls = [
+            {"tool": "edit_file", "args": {"path": "a.py"}},
+            {"tool": "apply_patch", "args": {"file_path": "b.py"}},
+            {"tool": "read_file", "args": {"path": "ignored.py"}},  # read is not a write
+        ]
+        assert backend._extract_files_modified(calls) == ["a.py", "b.py"]
+
+    def test_move_file_collects_destination_too(self):
+        backend = CLIBackend(moss_command="moss")
+        calls = [{"tool": "move_file", "args": {"path": "src", "destination": "dst"}}]
+        assert backend._extract_files_modified(calls) == ["src", "dst"]
+
+    def test_read_only_tools_not_collected(self):
+        backend = CLIBackend(moss_command="moss")
+        calls = [
+            {"tool": "read_file", "args": {"path": "r.py"}},
+            {"tool": "exec", "args": {"command": "ls"}},
+            {"tool": "list_directory", "args": {"path": "."}},
+        ]
+        assert backend._extract_files_modified(calls) == []
+
+    def test_missing_path_skipped(self):
+        # a write tool called without a path (malformed) shouldn't crash
+        backend = CLIBackend(moss_command="moss")
+        calls = [{"tool": "write_file", "args": {}}]
+        assert backend._extract_files_modified(calls) == []

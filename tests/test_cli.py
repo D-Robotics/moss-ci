@@ -81,7 +81,68 @@ tests:
         assert result.exit_code != 0
 
 
-class TestExportAndDiffFiles:
+class TestRunTagFilter:
+    def test_tag_filter_runs_only_matching(self, tmp_path):
+        # A suite with two tests, one tagged 'quick' and one tagged 'full'.
+        suite = tmp_path / "suite.yaml"
+        suite.write_text("""
+name: "tag-suite"
+version: "1.0"
+tests:
+  - name: "quick-test"
+    tags: [quick]
+    moss:
+      prompt: "reply: A"
+    eval:
+      - type: contains
+        value: "A"
+  - name: "full-test"
+    tags: [full]
+    moss:
+      prompt: "reply: B"
+    eval:
+      - type: contains
+        value: "B"
+""", encoding="utf-8")
+        # No --tag: both tests load (mock mode, no real Moss)
+        result = runner.invoke(app, ["run", str(suite), "--mock", "--no-fail-fast"])
+        assert result.exit_code == 0
+        assert "Running 2 tests" in result.stdout  # both tests run
+
+    def test_tag_filter_quick_only(self, tmp_path):
+        suite = tmp_path / "suite.yaml"
+        suite.write_text("""
+name: "tag-suite"
+version: "1.0"
+tests:
+  - name: "quick-test"
+    tags: [quick]
+    moss: {prompt: "a"}
+    eval: [{type: contains, value: "a"}]
+  - name: "full-test"
+    tags: [full]
+    moss: {prompt: "b"}
+    eval: [{type: contains, value: "b"}]
+""", encoding="utf-8")
+        result = runner.invoke(app, ["run", str(suite), "--mock", "--tag", "quick", "--no-fail-fast"])
+        assert result.exit_code == 0
+        assert "Filtered to tag 'quick': 1 test(s)" in result.stdout
+        assert "Running 1 tests" in result.stdout  # only the quick test
+
+    def test_tag_filter_no_match_exits(self, tmp_path):
+        suite = tmp_path / "suite.yaml"
+        suite.write_text("""
+name: "s"
+version: "1.0"
+tests:
+  - name: "t1"
+    tags: [quick]
+    moss: {prompt: "a"}
+    eval: [{type: contains, value: "a"}]
+""", encoding="utf-8")
+        result = runner.invoke(app, ["run", str(suite), "--mock", "--tag", "nonexistent"])
+        assert result.exit_code != 0
+        assert "No tests matched tag" in result.stdout
     def test_export_writes_valid_json(self, tmp_path, isolated_db):
         _save_run(isolated_db, "run-A", {"t1": "pass", "t2": "pass"})
         out = tmp_path / "run-A.json"
