@@ -18,7 +18,7 @@ class MossConfig(BaseModel):
 
 class EvalConfig(BaseModel):
     """Configuration for evaluation."""
-    judge_model: str = Field(default="claude-opus-4-8", description="Model for LLM-as-Judge")
+    judge_model: str = Field(default="HORIZON-GLM", description="Model for LLM-as-Judge")
 
 
 class FlakeDetection(BaseModel):

@@ -209,7 +209,9 @@ tests:
     tags: [quick]
     description: |
       让 Moss review 一段有除零 bug 的代码，llm_judge 按 rubric 打分。
-      需配 MOSS_CI_JUDGE_API_URL（OpenAI 兼容）。无 judge URL 时默认 3.0。
+      需配 MOSS_CI_JUDGE_API_URL + MOSS_CI_JUDGE_API_KEY（Anthropic 协议 endpoint，
+      默认 HORIZON-GLM @ https://llmapi.horizon.auto, Bearer 认证）。
+      未配则该 eval 标 error、F1 报 fail（不再造假分 3.0 假装通过）。
     moss:
       prompt: |
         Review this code and explain the bug and how to fix it:
@@ -219,6 +221,7 @@ tests:
         ```
     eval:
       - type: llm_judge
+        model: HORIZON-GLM
         rubric: |
           Score 1-5 whether the review:
           1. Correctly identifies the division-by-zero bug

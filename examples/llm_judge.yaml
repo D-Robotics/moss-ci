@@ -1,20 +1,24 @@
 name: "LLM Judge 示例"
 description: "演示用 LLM-as-Judge 评估回复质量"
+# judge 用 Anthropic 协议(默认 HORIZON-GLM @ https://llmapi.horizon.auto, Bearer)。
+# 需配环境变量 MOSS_CI_JUDGE_API_URL + MOSS_CI_JUDGE_API_KEY;未配则该 eval 标 error。
 version: "1.0"
 config:
   moss:
     timeout: 120
   eval:
-    judge_model: claude-opus-4-8
+    judge_model: HORIZON-GLM
 tests:
   - name: "code-review-quality"
     moss:
       prompt: "请 review 以下代码，指出潜在问题:\n```python\ndef divide(a, b):\n    return a / b\n```"
     eval:
       - type: llm_judge
+        model: HORIZON-GLM
         rubric: |
           请从以下维度评分（1-5分）：
           1. 是否指出了除零错误
           2. 建议是否具体可操作
           3. 回复是否清晰简洁
+          回复 JSON: {"score": <1-5>}
         threshold: 3.0

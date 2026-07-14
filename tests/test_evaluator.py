@@ -60,11 +60,155 @@ class TestToolArgsEvaluator:
 
 class TestLLMJudgeEvaluator:
     @pytest.mark.asyncio
-    async def test_returns_result(self):
+    async def test_not_configured_returns_error(self, monkeypatch):
+        # No judge URL/key set: the eval must fail loudly, NOT fake a 3.0 pass.
+        monkeypatch.delenv("MOSS_CI_JUDGE_API_URL", raising=False)
+        monkeypatch.delenv("MOSS_CI_JUDGE_API_KEY", raising=False)
         r = await LLMJudgeEvaluator().evaluate(
             LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "output", [])
-        assert isinstance(r, EvalResult)
         assert r.type == "llm_judge"
+        assert r.passed is False
+        assert r.score is None  # no phantom score pollutes the diff engine
+        assert r.error and "not configured" in r.error
+
+    @pytest.mark.asyncio
+    async def test_judge_success(self, monkeypatch):
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://llmapi.horizon.auto")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        self._stub_post(monkeypatch,
+                        body={"content": [{"type": "text", "text": '{"score": 4.0}'}]})
+        r = await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "good review", [])
+        assert r.passed is True
+        assert r.score == 4.0
+
+    @pytest.mark.asyncio
+    async def test_judge_below_threshold_fails(self, monkeypatch):
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://llmapi.horizon.auto")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        self._stub_post(monkeypatch,
+                        body={"content": [{"type": "text", "text": '{"score": 2.0}'}]})
+        r = await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "weak review", [])
+        assert r.passed is False
+        assert r.score == 2.0
+
+    @pytest.mark.asyncio
+    async def test_judge_markdown_fence(self, monkeypatch):
+        # Judges often wrap JSON in ```json fences — must still parse.
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://llmapi.horizon.auto")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        self._stub_post(monkeypatch,
+                        body={"content": [{"type": "text", "text": '```json\n{"score": 4.5}\n```'}]})
+        r = await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "x", [])
+        assert r.score == 4.5
+        assert r.passed is True
+
+    @pytest.mark.asyncio
+    async def test_judge_prose_fallback(self, monkeypatch):
+        # Non-JSON prose like "The score is 4" — regex fallback extracts it.
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://llmapi.horizon.auto")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        self._stub_post(monkeypatch,
+                        body={"content": [{"type": "text", "text": 'The review is solid. The score is 4 out of 5.'}]})
+        r = await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "x", [])
+        assert r.score == 4.0
+
+    @pytest.mark.asyncio
+    async def test_judge_unparseable_score_fails(self, monkeypatch):
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://llmapi.horizon.auto")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        self._stub_post(monkeypatch,
+                        body={"content": [{"type": "text", "text": "I cannot score this."}]})
+        r = await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "x", [])
+        assert r.passed is False
+        assert r.score is None
+        assert r.error and "non-numeric" in r.error
+
+    @pytest.mark.asyncio
+    async def test_judge_http_error(self, monkeypatch):
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://llmapi.horizon.auto")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        self._stub_post(monkeypatch, status=500, body={"error": "boom"})
+        r = await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "x", [])
+        assert r.passed is False
+        assert r.error and "500" in r.error
+
+    @pytest.mark.asyncio
+    async def test_bearer_auth_for_gateway(self, monkeypatch):
+        # Non-anthropic host (horizon gateway) must send Authorization: Bearer.
+        captured = self._stub_post(monkeypatch,
+                                   body={"content": [{"type": "text", "text": '{"score": 4.0}'}]})
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://llmapi.horizon.auto")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "x", [])
+        headers = captured["headers"]
+        assert headers.get("Authorization") == "Bearer test-key"
+        assert "x-api-key" not in headers
+
+    @pytest.mark.asyncio
+    async def test_apikey_auth_for_official_anthropic(self, monkeypatch):
+        # Official api.anthropic.com keeps x-api-key, no Bearer.
+        captured = self._stub_post(monkeypatch,
+                                   body={"content": [{"type": "text", "text": '{"score": 4.0}'}]})
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://api.anthropic.com")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "x", [])
+        headers = captured["headers"]
+        assert headers.get("x-api-key") == "test-key"
+        assert "Authorization" not in headers
+
+    @pytest.mark.asyncio
+    async def test_dimension_with_min_enforced(self, monkeypatch):
+        # A dimension with min>0 gates the overall pass.
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://llmapi.horizon.auto")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        self._stub_post(monkeypatch,
+                        body={"content": [{"type": "text", "text": '{"score": 3.0}'}]})
+        from moss_ci.models.test import LLMJudgeDimension
+        r = await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="x", threshold=3.0,
+                         dimensions=[LLMJudgeDimension(name="clarity", min=4.0)]), "x", [])
+        # score 3.0 meets threshold but fails the clarity(min=4) dimension.
+        assert r.passed is False
+
+    @staticmethod
+    def _stub_post(monkeypatch, body: dict, status: int = 200) -> dict:
+        """Replace httpx.AsyncClient.post with a stub that returns `body`.
+
+        Returns a dict that captures the headers sent, so a test can assert on
+        the auth scheme (Bearer vs x-api-key).
+        """
+        captured: dict = {}
+
+        class _Resp:
+            def __init__(self):
+                self.status_code = status
+                self.text = "stub"
+            def json(self):
+                return body
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            async def post(self, url, headers=None, json=None, timeout=None):
+                captured["url"] = url
+                captured["headers"] = headers or {}
+                captured["json"] = json
+                return _Resp()
+
+        import moss_ci.evaluator.llm_judge as mod
+        monkeypatch.setattr(mod.httpx, "AsyncClient", lambda: _Client())
+        return captured
+
 
 
 class TestSideEffectEvaluator:
