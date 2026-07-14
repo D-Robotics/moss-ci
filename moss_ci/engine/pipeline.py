@@ -10,7 +10,10 @@ from moss_ci.engine.executor import Executor
 @dataclass
 class PipelineConfig:
     fail_fast: bool = True
-    max_concurrency: int = 10
+    # Global concurrency cap across all suites. None = no global cap, so each
+    # suite's own ``max_concurrency`` (from YAML) is the real limit. A CLI
+    # ``--concurrency N`` sets this to cap every suite at N regardless of YAML.
+    max_concurrency: Optional[int] = None
     pipeline_name: str = "pipeline"
 
 

@@ -46,6 +46,12 @@ class TestResultRecord(Base):
     duration = Column(Float, default=0.0)
     moss_output = Column(Text, default="")
     moss_tool_calls = Column(JSON, default=list)
+    # Serialized list[TestResult] from flake detection runs. Stored as JSON
+    # (each run's status/output/evals) rather than as nested rows, because flake
+    # runs are read-only detail — `status`/`logs` show them but nothing queries
+    # them relationally. Without this column the per-run verdicts were lost on
+    # save, so `status` showed "flake" with no breakdown of which runs passed.
+    flake_runs = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
     suite = relationship("SuiteResultRecord", back_populates="tests")
     evals = relationship("EvalResultRecord", back_populates="test", cascade="all, delete-orphan")

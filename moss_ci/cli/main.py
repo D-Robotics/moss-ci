@@ -20,7 +20,7 @@ def run(
     test_name: str = typer.Option(None, "--test", help="Run a specific test"),
     tag: str = typer.Option(None, "--tag", help="Run only tests with this tag (e.g. quick / full)"),
     fail_fast: bool = typer.Option(True, "--fail-fast/--no-fail-fast"),
-    concurrency: int = typer.Option(10, "--concurrency", "-c"),
+    concurrency: int = typer.Option(None, "--concurrency", "-c", help="Global cap on concurrent Moss calls. Omit to use each suite's YAML max_concurrency."),
     mock: bool = typer.Option(False, "--mock", help="Use mock Moss output (no real Moss invoked)"),
 ):
     """Run test suites."""
@@ -101,6 +101,26 @@ def run(
         raise typer.Exit(1)
 
 
+def _render_flake_runs(t, console: Console) -> None:
+    """Show each flake run's verdict under a test.
+
+    Used by ``status`` and ``logs`` so a flake test isn't a bare "flake" with
+    no breakdown of which runs passed/failed and what the judge scored each.
+    """
+    if not t.flake_runs:
+        return
+    passes = sum(1 for r in t.flake_runs if r.status == "pass")
+    console.print(f"      [dim]flake: {passes}/{len(t.flake_runs)} runs passed[/dim]")
+    for i, r in enumerate(t.flake_runs):
+        color = "green" if r.status == "pass" else ("red" if r.status == "fail" else "yellow")
+        extra = ""
+        for ev in r.evals:
+            if ev.type == "llm_judge" and ev.score is not None:
+                extra = f"  judge={ev.score}"
+                break
+        console.print(f"      [{color}]{r.status:6}[/] run{i}{extra}")
+
+
 @app.command()
 def status(run_id: str = typer.Argument(..., help="Run ID")):
     """Show run status."""
@@ -118,6 +138,7 @@ def status(run_id: str = typer.Argument(..., help="Run ID")):
         for t in s.tests:
             color = "green" if t.status == "pass" else ("red" if t.status == "fail" else "yellow")
             console.print(f"    [{color}]{t.status:6}[/] {t.test_name}")
+            _render_flake_runs(t, console)
 
 
 @app.command()
@@ -137,6 +158,7 @@ def logs(run_id: str = typer.Argument(..., help="Run ID"), test_name: str = type
                 continue
             console.print(f"[bold]{t.test_name}[/bold] ({t.status}):")
             console.print(t.moss_output[:500])
+            _render_flake_runs(t, console)
 
 
 @app.command()

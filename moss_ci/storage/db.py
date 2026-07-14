@@ -22,6 +22,22 @@ class Database:
         self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False)
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # create_all does NOT add columns to tables that already exist, so
+            # an older moss_ci.db is missing columns introduced later. SQLite
+            # supports ADD COLUMN; ALTER is a no-op if the column is present.
+            await self._migrate(conn)
+
+    async def _migrate(self, conn):
+        # Lightweight additive migrations only (new columns). Inspect the live
+        # schema and add what's missing. Keeps a local dev DB usable without a
+        # full alembic upgrade for these small, backward-compatible additions.
+        from sqlalchemy import text, inspect
+        def _sync(c):
+            insp = inspect(c)
+            cols = {c["name"] for c in insp.get_columns("test_results")} if insp.has_table("test_results") else set()
+            if "test_results" in insp.get_table_names() and "flake_runs" not in cols:
+                c.execute(text("ALTER TABLE test_results ADD COLUMN flake_runs JSON"))
+        await conn.run_sync(_sync)
 
     async def close(self):
         if self.engine:

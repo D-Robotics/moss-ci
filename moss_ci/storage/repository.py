@@ -27,6 +27,7 @@ class RunRepository:
                     tr = TestResultRecord(
                         test_name=test.test_name, status=test.status, duration=test.duration,
                         moss_output=test.moss_output, moss_tool_calls=test.moss_tool_calls,
+                        flake_runs=self._dump_flake_runs(test.flake_runs),
                         error=test.error,
                     )
                     for ev in test.evals:
@@ -85,11 +86,26 @@ class RunRepository:
                 evals = [EvalResult(type=er.type, passed=bool(er.passed), score=er.score, details=er.details, error=er.error) for er in tr.evals]
                 tests.append(TestResult(test_name=tr.test_name, status=tr.status, duration=tr.duration,
                                         moss_output=tr.moss_output, moss_tool_calls=tr.moss_tool_calls,
-                                        evals=evals, error=tr.error))
+                                        evals=evals, error=tr.error,
+                                        flake_runs=self._load_flake_runs(tr.flake_runs)))
             suites.append(SuiteResult(suite_name=sr.suite_name, total=sr.total, passed=sr.passed,
-                                      failed=sr.failed, flake=sr.flake, error=sr.error, skipped=sr.skipped,
-                                      duration=sr.duration, tests=tests))
+                                  failed=sr.failed, flake=sr.flake, error=sr.error, skipped=sr.skipped,
+                                  duration=sr.duration, tests=tests))
         return PipelineResult(run_id=record.run_id, pipeline_name=record.pipeline_name,
                               status=RunStatus(record.status), summary=record.summary,
                               suites=suites, total_duration=record.total_duration,
                               created_at=record.created_at, completed_at=record.completed_at)
+
+    @staticmethod
+    def _dump_flake_runs(flake_runs) -> list | None:
+        # Serialize each flake run's TestResult to a plain dict. Flake runs are
+        # single-shot results, so their own flake_runs is None — no recursion.
+        if not flake_runs:
+            return None
+        return [r.model_dump(mode="json") for r in flake_runs]
+
+    @staticmethod
+    def _load_flake_runs(data) -> list[TestResult] | None:
+        if not data:
+            return None
+        return [TestResult.model_validate(d) for d in data]

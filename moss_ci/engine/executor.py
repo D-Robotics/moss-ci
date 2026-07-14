@@ -1,6 +1,9 @@
 from __future__ import annotations
 import asyncio
+import shutil
+import tempfile
 import time
+from pathlib import Path
 import structlog
 from moss_ci.engine.scheduler import SuitePlan, TestPlan, ExecutionPlan
 from moss_ci.models.test import MossCallSpec
@@ -14,8 +17,11 @@ logger = structlog.get_logger(__name__)
 class Executor:
     """Executes test plans with concurrency control."""
 
-    def __init__(self, max_concurrency: int = 10, runner=None):
-        self._semaphore = asyncio.Semaphore(max_concurrency)
+    def __init__(self, max_concurrency: int | None = None, runner=None):
+        # Outer (cross-suite) semaphore. None means no global cap — each suite's
+        # own max_concurrency (from YAML) is then the sole limit. A non-None
+        # value (set via CLI --concurrency) caps every suite at that many.
+        self._semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
         self._runner = runner  # Optional[MossRunner]; None = scaffold mock output
 
     async def execute(self, plan: ExecutionPlan) -> PipelineResult:
@@ -52,8 +58,10 @@ class Executor:
 
         async def run_with_limit(tp: TestPlan) -> TestResult:
             async with semaphore:
-                async with self._semaphore:
-                    return await self._execute_test(tp)
+                if self._semaphore is not None:
+                    async with self._semaphore:
+                        return await self._execute_test(tp)
+                return await self._execute_test(tp)
 
         # Schedule as real Tasks so fail_fast can cancel pending ones.
         # (Calling .done()/.cancel() on bare coroutines raises AttributeError,
@@ -144,12 +152,19 @@ class Executor:
         test = test_plan.test
         try:
             if self._runner is not None:
+                # Isolate workdir: copy the test's workdir to a fresh temp dir
+                # so Moss mutates a throwaway copy, not the source fixtures.
+                # Without this, a run that creates hello.txt leaves it behind
+                # and the next run's "create hello.txt" test sees it already
+                # exists → Moss does nothing → tool_sequence fails. Each call
+                # (including each flake run) gets its own clean copy.
+                workdir = await self._stage_workdir(test.moss.workdir)
                 moss_spec = MossCallSpec(
                     prompt=test.moss.prompt,
                     task=test.moss.task,
                     conversation=test.moss.conversation,
                     context=test.moss.context,
-                    workdir=test.moss.workdir,
+                    workdir=workdir,
                     env=test.moss.env,
                 )
                 if test.moss.task:
@@ -196,3 +211,28 @@ class Executor:
             eval_spec, moss_output, moss_tool_calls,
             files_modified=files_modified, exit_code=exit_code,
         )
+
+    @staticmethod
+    async def _stage_workdir(workdir: str | None) -> str | None:
+        """Copy the test's workdir to a fresh temp dir, return that path.
+
+        Moss runs against the copy, so mutations (created/edited files, pytest
+        runs) never touch the source fixtures and never leak into the next run.
+        Returns None when there's no workdir to stage. The temp dir is left in
+        place for the process lifetime (the OS / runner reaps it); we don't
+        clean up eagerly because a flake run's later inspection (logs/status)
+        may want to read what Moss produced.
+        """
+        if not workdir:
+            return None
+        src = Path(workdir)
+        if not src.is_dir():
+            return None
+        # Skip Moss's own runtime state when copying — sessions/history are per-
+        # invocation and must not carry over between isolated runs.
+        def _copy() -> str:
+            dst = Path(tempfile.mkdtemp(prefix="moss-ci-wd-"))
+            ignore = shutil.ignore_patterns(".moss", "__pycache__")
+            shutil.copytree(src, dst, ignore=ignore, dirs_exist_ok=True)
+            return str(dst)
+        return await asyncio.to_thread(_copy)
