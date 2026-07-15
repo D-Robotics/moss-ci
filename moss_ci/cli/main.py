@@ -115,8 +115,11 @@ def _render_flake_runs(t, console: Console) -> None:
         color = "green" if r.status == "pass" else ("red" if r.status == "fail" else "yellow")
         extra = ""
         for ev in r.evals:
-            if ev.type == "llm_judge" and ev.score is not None:
-                extra = f"  judge={ev.score}"
+            if ev.type == "llm_judge":
+                if ev.score is not None:
+                    extra = f"  judge={ev.score}"
+                elif ev.skipped and ev.error:
+                    extra = f"  judge skipped ({ev.error})"
                 break
         console.print(f"      [{color}]{r.status:6}[/] run{i}{extra}")
 

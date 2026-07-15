@@ -33,7 +33,9 @@ class RunRepository:
                     for ev in test.evals:
                         tr.evals.append(EvalResultRecord(
                             type=ev.type, passed=1 if ev.passed else 0,
-                            score=ev.score, details=ev.details, error=ev.error,
+                            score=ev.score,
+                            details=self._eval_details(ev),
+                            error=ev.error,
                         ))
                     sr.tests.append(tr)
                 run.suites.append(sr)
@@ -83,7 +85,7 @@ class RunRepository:
         for sr in record.suites:
             tests = []
             for tr in sr.tests:
-                evals = [EvalResult(type=er.type, passed=bool(er.passed), score=er.score, details=er.details, error=er.error) for er in tr.evals]
+                evals = [self._eval_to_domain(er) for er in tr.evals]
                 tests.append(TestResult(test_name=tr.test_name, status=tr.status, duration=tr.duration,
                                         moss_output=tr.moss_output, moss_tool_calls=tr.moss_tool_calls,
                                         evals=evals, error=tr.error,
@@ -109,3 +111,21 @@ class RunRepository:
         if not data:
             return None
         return [TestResult.model_validate(d) for d in data]
+
+    @staticmethod
+    def _eval_details(ev) -> dict:
+        # Persist `skipped` inside the JSON details column rather than adding a
+        # new DB column (avoids another migration). The flag is popped on load.
+        d = dict(ev.details or {})
+        if ev.skipped:
+            d["_skipped"] = True
+        return d
+
+    @staticmethod
+    def _eval_to_domain(er) -> EvalResult:
+        # Restore skipped from details (written by _eval_details). Old rows
+        # without the flag simply read skipped=False.
+        d = dict(er.details or {})
+        skipped = bool(d.pop("_skipped", False))
+        return EvalResult(type=er.type, passed=bool(er.passed), score=er.score,
+                         details=d, error=er.error, skipped=skipped)

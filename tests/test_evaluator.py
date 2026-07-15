@@ -209,6 +209,50 @@ class TestLLMJudgeEvaluator:
         monkeypatch.setattr(mod.httpx, "AsyncClient", lambda: _Client())
         return captured
 
+    @staticmethod
+    def _stub_post_raises(monkeypatch, exc):
+        """Make the judge's httpx call raise `exc` (a network/transport error)."""
+        class _Client:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            async def post(self, url, headers=None, json=None, timeout=None):
+                raise exc
+        import moss_ci.evaluator.llm_judge as mod
+        monkeypatch.setattr(mod.httpx, "AsyncClient", lambda: _Client())
+
+    @pytest.mark.asyncio
+    async def test_judge_network_error_skips(self, monkeypatch):
+        # An unreachable endpoint (connect/timeout) is environmental — the eval
+        # is skipped, not failed, so it can't turn a green suite red. CI uses
+        # this path when the runner can't reach the judge host.
+        import httpx
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://llmapi.horizon.auto")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        # httpx ConnectTimeout has an empty str() — this also guards _fmt_error
+        # leads with the type name rather than producing an unreadable "".
+        self._stub_post_raises(monkeypatch, httpx.ConnectTimeout(""))
+        r = await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "x", [])
+        assert r.skipped is True
+        assert r.passed is False
+        assert r.score is None
+        assert r.error and "ConnectTimeout" in r.error  # readable, not ""
+
+    @pytest.mark.asyncio
+    async def test_judge_http_error_not_skipped(self, monkeypatch):
+        # A non-network failure (HTTP 401/500, bad score) must NOT skip — it's a
+        # real problem and should fail loudly. Only the network path skips.
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://llmapi.horizon.auto")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "test-key")
+        self._stub_post(monkeypatch, status=401, body={"error": "bad key"})
+        r = await LLMJudgeEvaluator().evaluate(
+            LLMJudgeSpec(type="llm_judge", rubric="score quality", threshold=3.0), "x", [])
+        assert r.skipped is False
+        assert r.passed is False
+        assert r.error and "401" in r.error
+
 
 
 class TestSideEffectEvaluator:

@@ -203,3 +203,58 @@ tests:
         from moss_ci.engine.executor import Executor
         assert await Executor._stage_workdir(None) is None
         assert await Executor._stage_workdir("/does/not/exist/xyz") is None
+
+
+class TestJudgeUnreachableSkips:
+    @pytest.mark.asyncio
+    async def test_flake_test_skips_when_judge_unreachable(self, monkeypatch):
+        # End-to-end: when the judge endpoint is unreachable from this host,
+        # F1 (a flake test with a judge eval) must come out as "skipped", not
+        # "fail" — so a network gap can't turn a green suite red. This is the
+        # path CI hits when the runner can't reach the judge host.
+        import httpx
+        from moss_ci.runner.base import MossBackend, MossRunner
+        from moss_ci.models.test import MossCallSpec
+        from moss_ci.models.result import MossResult
+        import moss_ci.evaluator.llm_judge as judge_mod
+
+        # Judge network failure: every _call_judge raises ConnectTimeout.
+        class _NetFailClient:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def post(self, *a, **k): raise httpx.ConnectTimeout("")
+        monkeypatch.setattr(judge_mod.httpx, "AsyncClient", lambda: _NetFailClient())
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_URL", "https://unreachable.example")
+        monkeypatch.setenv("MOSS_CI_JUDGE_API_KEY", "k")
+
+        class _MossBackend(MossBackend):
+            async def run(self, spec: MossCallSpec, timeout: int = 300):
+                return MossResult(output="some review", exit_code=0)
+
+        yaml = """
+name: "judge-skip"
+version: "1.0"
+config:
+  max_concurrency: 1
+  fail_fast: false
+tests:
+  - name: "F1-judge"
+    moss: {prompt: "review this"}
+    eval:
+      - type: llm_judge
+        rubric: "score 1-5"
+        threshold: 3.0
+    flake_detection:
+      runs: 3
+      pass_threshold: 2
+      consensus: majority
+"""
+        runner = MossRunner(backend=_MossBackend())
+        suite = parse_suite_string(yaml)
+        engine = PipelineEngine(PipelineConfig(fail_fast=False), runner=runner)
+        result = await engine.run([suite])
+        t = result.suites[0].tests[0]
+        assert t.status == "skipped"
+        # And the suite summary isn't dragged red: 0 failed.
+        assert result.suites[0].failed == 0
+        assert result.suites[0].skipped == 1

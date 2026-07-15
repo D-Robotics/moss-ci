@@ -113,7 +113,7 @@ class Executor:
                     pending = set()
 
         results: list[TestResult] = []
-        passed = failed = error_cnt = 0
+        passed = failed = error_cnt = skipped_cnt = 0
         for i in range(len(suite.tests)):
             result = results_by_index.get(i)
             if isinstance(result, Exception):
@@ -127,6 +127,8 @@ class Executor:
                     failed += 1
                 elif tr.status == "error":
                     error_cnt += 1
+                elif tr.status == "skipped":
+                    skipped_cnt += 1
             results.append(tr)
 
         duration = time.monotonic() - start
@@ -134,7 +136,7 @@ class Executor:
             suite_name=suite.suite_name,
             total=len(suite.tests),
             passed=passed, failed=failed, error=error_cnt,
-            skipped=suite.skipped_count,
+            skipped=suite.skipped_count + skipped_cnt,
             duration=duration, tests=results,
         )
 
@@ -192,8 +194,15 @@ class Executor:
                 )
                 eval_results.append(er)
 
-            all_passed = all(er.passed for er in eval_results)
-            status = "pass" if all_passed else "fail"
+            # A skipped eval (e.g. judge unreachable from this host) is neither
+            # pass nor fail — exclude it from the verdict. If every eval was
+            # skipped, the test is skipped; if the non-skipped ones all pass,
+            # the test passes; any non-skipped fail fails it.
+            decisive = [er for er in eval_results if not er.skipped]
+            if not decisive:
+                status = "skipped"
+            else:
+                status = "pass" if all(er.passed for er in decisive) else "fail"
         except asyncio.CancelledError:
             raise
         except Exception as e:

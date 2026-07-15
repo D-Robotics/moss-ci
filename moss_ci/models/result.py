@@ -23,6 +23,12 @@ class EvalResult(BaseModel):
     score: Optional[float] = Field(default=None, description="Score (for llm_judge)")
     details: dict[str, Any] = Field(default_factory=dict, description="Detailed results")
     error: Optional[str] = Field(default=None, description="Error message if evaluation failed")
+    # True when the eval couldn't run for an environmental reason (e.g. the
+    # judge endpoint is unreachable from this host). A skipped eval is neither
+    # pass nor fail — Executor excludes it from the pass verdict so a transient
+    # network gap can't turn a green suite red. Distinct from a real failure
+    # (wrong answer, HTTP 401, unparseable score) which still marks passed=False.
+    skipped: bool = Field(default=False, description="Eval couldn't run (environmental), not a pass/fail")
 
 
 class TestResult(BaseModel):

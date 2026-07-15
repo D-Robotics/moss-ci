@@ -15,13 +15,22 @@ class FlakeDetector:
         for i in range(flake.runs):
             result = await run_once(plan)
             runs.append(result)
-        passed_count = sum(1 for r in runs if r.status == "pass")
-        if flake.consensus == "unanimous":
-            final_status = "pass" if passed_count == flake.runs else "fail"
+        # A run that was skipped (e.g. judge endpoint unreachable from this
+        # host) is environmental, not a verdict. If EVERY run skipped, the
+        # whole test is skipped; otherwise skipped runs are excluded from the
+        # pass/fail consensus so a reachable-then-not host can't flunk it.
+        non_skipped = [r for r in runs if r.status != "skipped"]
+        if not non_skipped:
+            final_status = "skipped"
+            passed_count = 0
         else:
-            final_status = "pass" if passed_count >= flake.pass_threshold else "fail"
-        if passed_count < flake.runs and passed_count >= flake.pass_threshold:
-            final_status = "flake"
+            passed_count = sum(1 for r in non_skipped if r.status == "pass")
+            if flake.consensus == "unanimous":
+                final_status = "pass" if passed_count == len(non_skipped) else "fail"
+            else:
+                final_status = "pass" if passed_count >= flake.pass_threshold else "fail"
+            if passed_count < len(non_skipped) and passed_count >= flake.pass_threshold:
+                final_status = "flake"
         return TestResult(
             test_name=plan.test.name, status=final_status,
             duration=sum(r.duration for r in runs),

@@ -21,11 +21,18 @@ class LLMJudgeEvaluator(BaseEvaluator):
         try:
             score = await self._call_judge(judge_model, prompt)
         except Exception as e:
-            # Includes "not configured" — a misconfigured judge must NOT show as
-            # a silent pass. passed=False makes F1 fail loudly instead of faking
-            # a score. score stays None so DiffEngine skips it (no bogus
-            # improved/degraded from a phantom number).
-            return EvalResult(type="llm_judge", passed=False, score=None, error=str(e))
+            # Distinguish an unreachable endpoint (network) from a real error.
+            # A network failure (connect/timeout) is environmental — the judge
+            # is fine, the host just can't reach it. Skip the eval so a network
+            # gap can't turn a green suite red; it auto-recovers when reachable.
+            # Everything else (no config, HTTP 401, unparseable score) is a real
+            # failure and must show passed=False — never fake a pass.
+            msg = self._fmt_error(e)
+            if self._is_network_error(e):
+                logger.warning("llm_judge.endpoint_unreachable", error=msg)
+                return EvalResult(type="llm_judge", passed=False, skipped=True,
+                                  score=None, error=f"judge unreachable: {msg}")
+            return EvalResult(type="llm_judge", passed=False, score=None, error=msg)
         # Per-dimension pass: only enforce dims whose min was set explicitly
         # (>0). A dimension with min==0 (the default) carries no threshold, so
         # it would let any score through — recording it without enforcing avoids
@@ -41,6 +48,25 @@ class LLMJudgeEvaluator(BaseEvaluator):
         passed = (score >= spec.threshold) and dims_pass
         return EvalResult(type="llm_judge", passed=passed, score=score,
                           details={"judge_model": judge_model, "threshold": spec.threshold, "score": score, "dimensions": dims})
+
+    @staticmethod
+    def _fmt_error(e: Exception) -> str:
+        # httpx network errors have an empty str() (e.g. ConnectTimeout('')),
+        # which made error="" — unreadable. Lead with the type name instead.
+        s = str(e)
+        return f"{type(e).__name__}: {s}" if s else type(e).__name__
+
+    @staticmethod
+    def _is_network_error(e: Exception) -> bool:
+        # TransportError is httpx's base for connect/timeout/protocol failures
+        # at the transport layer; ConnectError/ConnectTimeout/ReadTimeout/
+        # RemoteProtocolError all subclass it. Socket-level gaierror covers DNS.
+        import httpx
+        if isinstance(e, (httpx.TransportError, httpx.NetworkError)):
+            return True
+        # config-not-configured is NOT a network error — it's a setup problem,
+        # so it stays a hard fail rather than being silently skipped.
+        return False
 
     async def _call_judge(self, model: str, prompt: str) -> float:
         url = os.environ.get("MOSS_CI_JUDGE_API_URL", "")
@@ -63,7 +89,11 @@ class LLMJudgeEvaluator(BaseEvaluator):
 
         async with httpx.AsyncClient() as c:
             r = await c.post(endpoint, headers=headers, json=payload,
-                             timeout=httpx.Timeout(120))
+                             # Short connect timeout: if the runner can't reach
+                             # the judge host, fail fast (→ skip) instead of
+                             # burning the full read timeout per flake run.
+                             # F1 runs 3x, so 120s connect would cost 6+ min.
+                             timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0))
         if r.status_code != 200:
             raise RuntimeError(f"Judge API returned {r.status_code}: {r.text[:200]}")
         data = r.json()
