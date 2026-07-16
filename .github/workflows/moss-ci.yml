@@ -109,6 +109,41 @@ jobs:
             echo "layer_label=quick (push/PR)" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Diagnose model gateway reachability
+        # Pinpoints WHERE a Moss call fails when tests come back empty:
+        #   L1 network — can the runner TCP-reach the gateway at all?
+        #   L2 auth    — does an authenticated /v1/chat/completions call
+        #                return 200 (ok) / 401|403 (auth) / 404 (path) /
+        #                000+timeout (network blocked)?
+        # Key is read from env, never echoed. Safe to remove once green.
+        env:
+          MOSS_API_KEY: ${{ secrets.MOSS_API_KEY }}
+        run: |
+          set +e
+          HOST=ai-api.d-robotics.cc
+          BASE=https://$HOST
+          echo "::group::L1 — TCP reachability to $HOST:443"
+          if command -v nc >/dev/null 2>&1; then
+            timeout 10 bash -c "echo > /dev/tcp/$HOST/443" && echo "L1=OK (port 443 reachable)" || echo "L1=FAIL (cannot connect — network blocked / firewall)"
+          else
+            echo "L1=nc unavailable, using curl connect-only"
+            curl -sS -o /dev/null -w "tcp_connect=%{http_code} time=%{time_connect}s\n" \
+              --connect-timeout 10 "$BASE" || echo "L1=curl_connect_failed"
+          fi
+          echo "::endgroup::"
+
+          echo "::group::L2 — authenticated chat/completions (HTTP status only)"
+          code=$(curl -sS -o /tmp/moss-ci/gw_body.txt -w "%{http_code}" \
+            --connect-timeout 15 --max-time 30 \
+            -X POST "$BASE/v1/chat/completions" \
+            -H "Authorization: Bearer $MOSS_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"ping"}],"max_tokens":4}')
+          echo "L2 http_code=$code"
+          echo "L2 body (first 300 chars):"
+          head -c 300 /tmp/moss-ci/gw_body.txt 2>/dev/null; echo
+          echo "::endgroup::"
+
       - name: Run capability suite
         env:
           PYTHONUTF8: '1'
