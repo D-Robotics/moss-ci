@@ -43,21 +43,21 @@ moss-ci diff <prev_run_id> <curr_run_id>
 
 CI 让"改 Moss → push → 自动跑能力测试 → 看退步没"全自动。架构：
 
-- **moss-ci 工具**在 `1-ztc/ci_test`（pip install 拉取）
+- **moss-ci 工具**在 `D-Robotics/moss-ci`（pip install 拉取）
 - **能力测试套件**在 ci_test 的 `examples/moss_capabilities.yaml`
 - **CI workflow**在 Moss fork（`1-ztc/moss`）的 `.github/workflows/moss-ci.yml`
 - **API key**在 Moss fork 的 GitHub Secret `MOSS_API_KEY`
 
 ### 在 Moss fork 激活 CI
 
-参考 workflow 在 `1-ztc/ci_test` 的 `.github/workflows/moss-ci.yml`。把它复制到 `<moss-fork>/.github/workflows/moss-ci.yml`，然后在 fork 的 Settings → Secrets → Actions 加 `MOSS_API_KEY`（值是 Moss 模型的 apiKey）。
+参考 workflow 在 `D-Robotics/moss-ci` 的 `.github/workflows/moss-ci.yml`。把它复制到 `<moss-fork>/.github/workflows/moss-ci.yml`，然后在 fork 的 Settings → Secrets → Actions 加 `MOSS_API_KEY`（值是 Moss 模型的 apiKey）。
 
 ### CI 工作流
 
 push 到 `main` 或 `2026_*` 分支 / 开 PR 时触发：
 
 1. 构建 Moss（`npm run build --workspace @rdk-moss/agent`）
-2. `pip install` moss-ci from `1-ztc/ci_test`
+2. `pip install` moss-ci from `D-Robotics/moss-ci`
 3. 拉能力测试套件 + fixture（从 ci_test 仓库 clone examples）
 4. 从 `MOSS_API_KEY` secret 生成临时 config.json（key 不进仓库/日志）
 5. 跑能力测试（真实调 Moss）

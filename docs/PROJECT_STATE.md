@@ -7,7 +7,7 @@
 
 | 仓库 | 地址 | 角色 | 关键分支 |
 |---|---|---|---|
-| **ci_test** | github.com/1-ztc/ci_test | moss-ci 工具 + 能力测试套件 | `feat/implementation`（PR #1）|
+| **moss-ci** | github.com/D-Robotics/moss-ci | moss-ci 工具 + 能力测试套件 | `main` |
 | **moss fork** | github.com/1-ztc/moss | Moss 源码 fork + CI workflow | `2026_07_08`（上游: D-Robotics/moss,只读）|
 
 - ci_test 是**测试工具**:CLI + 5 评估器 + diff + flake + export/diff-files
