@@ -144,6 +144,37 @@ jobs:
           head -c 300 /tmp/moss-ci/gw_body.txt 2>/dev/null; echo
           echo "::endgroup::"
 
+      - name: Diagnose judge gateway reachability
+        # Same layering for the llm_judge endpoint (MOSS_CI_JUDGE_API_URL),
+        # which the F1 eval calls via Anthropic /v1/messages. The judge uses
+        # host-based auth: x-api-key for api.anthropic.com, Bearer otherwise.
+        # If MOSS_CI_JUDGE_API_URL is empty, prints that and skips.
+        env:
+          MOSS_CI_JUDGE_API_URL: ${{ secrets.MOSS_CI_JUDGE_API_URL }}
+          MOSS_CI_JUDGE_API_KEY: ${{ secrets.MOSS_CI_JUDGE_API_KEY }}
+        run: |
+          set +e
+          BASE="${MOSS_CI_JUDGE_API_URL%/}"
+          if [ -z "$BASE" ]; then echo "JUDGE=SKIP (MOSS_CI_JUDGE_API_URL not set)"; exit 0; fi
+          HOST=$(echo "$BASE" | sed -E 's#^https?://##; s#/.*##')
+          echo "::group::J-L1 — TCP reachability to $HOST:443"
+          timeout 10 bash -c "echo > /dev/tcp/$HOST/443" && echo "J-L1=OK" || echo "J-L1=FAIL (network blocked)"
+          echo "::endgroup::"
+          # Auth header: official Anthropic uses x-api-key; any other host uses Bearer.
+          if [ "$HOST" = "api.anthropic.com" ]; then AUTH=(-H "x-api-key: $MOSS_CI_JUDGE_API_KEY"); else AUTH=(-H "Authorization: Bearer $MOSS_CI_JUDGE_API_KEY"); fi
+          echo "::group::J-L2 — authenticated /v1/messages (HTTP status only)"
+          code=$(curl -sS -o /tmp/moss-ci/judge_body.txt -w "%{http_code}" \
+            --connect-timeout 15 --max-time 30 \
+            -X POST "$BASE/v1/messages" \
+            -H "Content-Type: application/json" \
+            -H "anthropic-version: 2023-06-01" \
+            "${AUTH[@]}" \
+            -d '{"model":"HORIZON-GLM","max_tokens":4,"messages":[{"role":"user","content":"ping"}]}')
+          echo "J-L2 http_code=$code"
+          echo "J-L2 body (first 300 chars):"
+          head -c 300 /tmp/moss-ci/judge_body.txt 2>/dev/null; echo
+          echo "::endgroup::"
+
       - name: Run capability suite
         env:
           PYTHONUTF8: '1'
