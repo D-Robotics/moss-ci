@@ -179,8 +179,12 @@ jobs:
         env:
           PYTHONUTF8: '1'
           MOSS_CLI_COMMAND: 'node ${{ github.workspace }}/packages/moss-agent/dist/cli.js --config-file /tmp/moss-ci/config.json'
-          # llm_judge (F1) reads these; without them the eval is marked error
-          # (F1 fails loudly) rather than faking a score.
+          # llm_judge (F1) reads these. If the judge endpoint is unreachable
+          # from the runner (e.g. an internal/VPC gateway GitHub's hosted
+          # runners can't reach), F1 is marked SKIPPED — not error, not a
+          # red CI — and auto-recovers once a reachable endpoint is configured.
+          # Leave them set even if currently unreachable: an unset secret
+          # surfaces as a config error, while an unreachable one skips cleanly.
           MOSS_CI_JUDGE_API_URL: ${{ secrets.MOSS_CI_JUDGE_API_URL }}
           MOSS_CI_JUDGE_API_KEY: ${{ secrets.MOSS_CI_JUDGE_API_KEY }}
         run: moss-ci run "$SUITE_DIR/moss_capabilities.yaml" --no-fail-fast ${{ steps.layer.outputs.tag_arg }}
@@ -240,6 +244,42 @@ jobs:
           else
             echo "## Moss CI — run failed before a result was exported (no diff available)" >> "$GITHUB_STEP_SUMMARY"
             echo "Check the 'Run capability suite' step logs above." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Surface any judge (llm_judge) evals that skipped because the
+          # endpoint is unreachable from this runner. Keeps the "why is F1
+          # skipped?" answer in the summary instead of buried in step logs.
+          if [ -f /tmp/moss-ci/current.json ]; then
+            python - <<'PY'
+          import json
+          try:
+              d = json.load(open("/tmp/moss-ci/current.json"))
+          except Exception:
+              raise SystemExit(0)
+          skipped = []
+          for s in d.get("suites", []):
+              for t in s.get("tests", []):
+                  for e in t.get("evals", []):
+                      if e.get("type") == "llm_judge" and e.get("skipped"):
+                          skipped.append(t.get("test_name", "?"))
+                  for fr in t.get("flake_runs") or []:
+                      for e in fr.get("evals", []):
+                          if e.get("type") == "llm_judge" and e.get("skipped") and t.get("test_name") not in skipped:
+                              skipped.append(t.get("test_name", "?"))
+          if skipped:
+              with open("/tmp/moss-ci/_judge_note.md", "w") as f:
+                  f.write(
+                      "\n### llm_judge skipped\n\n"
+                      + ", ".join(sorted(set(skipped)))
+                      + " — the judge endpoint (`MOSS_CI_JUDGE_API_URL`) was "
+                      "unreachable from this runner, so the judge eval skipped "
+                      "cleanly (not a failure). It auto-recovers once a "
+                      "runner-reachable endpoint is configured.\n"
+                  )
+          else:
+              open("/tmp/moss-ci/_judge_note.md", "w").close()
+          PY
+            cat /tmp/moss-ci/_judge_note.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           fi
 
       - name: Save current as next run's baseline
